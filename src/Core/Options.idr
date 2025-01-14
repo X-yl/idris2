@@ -62,6 +62,7 @@ data CG = Chez
         | Javascript
         | RefC
         | VMCodeInterp
+        | CIL
         | Other String
 
 export
@@ -87,6 +88,7 @@ Show CG where
   show Javascript = "javascript"
   show RefC = "refc"
   show VMCodeInterp = "vmcode-interp"
+  show CIL = "cil"
   show (Other s) = s
 
 public export
@@ -210,6 +212,7 @@ availableCGs o
        ("javascript", Javascript),
        ("refc", RefC),
        ("gambit", Gambit),
+       ("cil", CIL),
        ("vmcode-interp", VMCodeInterp)] ++ additionalCGs o
 
 export

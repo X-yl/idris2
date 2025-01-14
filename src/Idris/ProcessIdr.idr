@@ -1,6 +1,7 @@
 module Idris.ProcessIdr
 
 import Compiler.RefC.RefC
+import Compiler.CIL.Compile
 import Compiler.Scheme.Chez
 import Compiler.Scheme.ChezSep
 import Compiler.Scheme.Racket
@@ -284,6 +285,7 @@ getCG Node = pure $ Just codegenNode
 getCG Javascript = pure $ Just codegenJavascript
 getCG RefC = pure $ Just codegenRefC
 getCG VMCodeInterp = pure $ Just codegenVMCodeInterp
+getCG CIL = pure $ Just codegenCIL
 getCG (Other s) = getCodegen s
 
 export
