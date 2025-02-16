@@ -5,6 +5,7 @@ import Data.Vect
 import Data.List1
 import Core.Context
 import Compiler.RefC.RefC
+import Data.SortedMap
 
 cType : CILType -> String
 cType CILU8 = "uint8_t"
@@ -21,6 +22,7 @@ cType (CILPtr x) = cType x ++ "*"
 cType CILWorld = "void*"
 cType CILDyn = "Value*"
 cType (CILFn args ret) = cType ret ++ " (*)(" ++ concat (intersperse ", " (cType <$> args)) ++ ")"
+cType (CILStruct name members) = "struct " ++ cName name
 
 data OutputRef : Type where
 
@@ -45,6 +47,17 @@ mutual
               emit ") {\n"
               emitStmt body
               emit "}\n"
+          emitDef' (MkCILStruct fc name fields) = do
+              emit "struct "
+              emit (cName name)
+              emit " { "
+              ignore . sequence $ intersperse (emit ", ") (emitField <$> Data.SortedMap.toList fields)
+              emit " };\n"
+              where emitField : (Name, CILType) -> Core ()
+                    emitField (name, ty) = do
+                      emit (cType ty)
+                      emit " "
+                      emit (cName name)
 
   emitArgs : {auto _: Ref OutputRef String} -> List (Name, CILType) -> Core ()
   emitArgs xs = emit . concat $ intersperse ", " (emitArg <$> xs)
@@ -101,7 +114,7 @@ mutual
   emitOp Crash            = ?emitOp_rhs_38
 
   emitExpr : {auto _: Ref OutputRef String} -> CILExpr -> Core ()
-  emitExpr (CILExprCall fc x xs) = do
+  emitExpr (CILExprCall fc x ty1 xs ty2) = do 
                                       emit "("
                                       emitExpr x
                                       emit ")("
@@ -109,8 +122,17 @@ mutual
                                       emit ")"
   emitExpr (CILExprOp fc f xs) = emitOp f xs
   emitExpr (CILExprConstant fc cst) = emitConst cst
-  emitExpr (CILExprLocal fc n) = emit $ cName n
-  emitExpr (CILExprRef fc n) = emit $ cName n
+  emitExpr (CILExprLocal fc n ty) = emit $ cName n
+  emitExpr (CILExprRef fc n ty) = emit $ cName n
+  emitExpr (CILExprStruct fc n ty args) = do emit "struct "
+                                             emit $ cName n
+                                             emit " { "
+                                             ignore . sequence $ intersperse (emit ", ") (emitExpr <$> args)
+                                             emit " } "
+  emitExpr (CILExprField fc n ty f) = do emit "("
+                                         emitExpr n
+                                         emit ")."
+                                         emit $ cName f
 
   covering
   emitConst : {auto _: Ref OutputRef String} -> Constant -> Core ()
