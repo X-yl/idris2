@@ -1,11 +1,11 @@
 module Compiler.CIL.Emit
 
 import Compiler.CIL.CIL
-import Data.Vect
-import Data.List1
-import Core.Context
 import Compiler.RefC.RefC
+import Core.Context
+import Data.List1
 import Data.SortedMap
+import Data.Vect
 
 cType : CILType -> String
 cType CILU8 = "uint8_t"
@@ -58,6 +58,50 @@ mutual
                       emit (cType ty)
                       emit " "
                       emit (cName name)
+
+
+  -- cast : {auto _: Ref OutputRef String} -> CILType ->  CILExpr -> Core ()
+  -- cast to expr = do cast' !(inferExprType expr) to expr
+  -- where cast' : CILType -> CILType -> CILExpr -> Core ()
+  --       cast' from to x with (from == to)
+  --         _                   | True =  emitExpr x
+  --         cast' from CILU8 x  | _ = do emit "(uint8_t) "
+  --                                      emitExpr x
+  --         cast' from CILU16 x | _ = do emit "(uint16_t) "
+  --                                      emitExpr x
+  --         cast' from CILU32 x | _ = do emit "(uint32_t) "
+  --                                      emitExpr x
+  --         cast' from CILU64 x | _ = do emit "(uint64_t) "
+  --                                      emitExpr x
+  --         cast' from CILI8 x  | _ = do emit "(int8_t) "
+  --                                      emitExpr x
+  --         cast' from CILI16 x | _ = do emit "(int16_t) "
+  --                                      emitExpr x
+  --         cast' from CILI32 x | _ = do emit "(int32_t) "
+  --                                      emitExpr x
+  --         cast' from CILI64 x | _ = do emit "(int64_t) "
+  --                                      emitExpr x
+  --         cast' from CILF32 x | _ = do emit "(float) "
+  --                                      emitExpr x
+  --         cast' from CILF64 x | _ = do emit "(double) "
+  --                                      emitExpr x
+  --         cast' from (CILPtr y) x | _ = do emit "("
+  --                                          emit (cType (CILPtr y))
+  --                                          emit ") "
+  --                                          emitExpr x
+  --         cast' from CILWorld x | _ = do emit "(void*) "
+  --                                        emitExpr x
+  --         cast' from CILDyn x | _ = ?
+  --         cast' CILDyn (CILFn xs y) x | _ = ?
+  --         cast' (CILFn ys z) (CILFn xs y) x | _ = ?
+  --         cast' (CILStruct n z) (CILFn xs y) x | _ = ?
+  --         cast' from (CILStruct n y) x | _ = do emit "("
+  --                                               emit (cType (CILStruct n y))
+  --                                               emit ") "
+  --                                               emitExpr x
+  --         cast' from to x | _ = throw $ InternalError "unhandled cast"
+          
+    
 
   emitArgs : {auto _: Ref OutputRef String} -> List (Name, CILType) -> Core ()
   emitArgs xs = emit . concat $ intersperse ", " (emitArg <$> xs)
@@ -120,8 +164,8 @@ mutual
                                       emit ")("
                                       ignore . sequence $ intersperse (emit ", ") (emitExpr <$> xs)
                                       emit ")"
-  emitExpr (CILExprOp fc f xs) = emitOp f xs
-  emitExpr (CILExprConstant fc cst) = emitConst cst
+  emitExpr (CILExprOp fc f xs ty) = emitOp f xs
+  emitExpr (CILExprConstant fc cst ty) = emitConst cst
   emitExpr (CILExprLocal fc n ty) = emit $ cName n
   emitExpr (CILExprRef fc n ty) = emit $ cName n
   emitExpr (CILExprStruct fc n ty args) = do emit "struct "

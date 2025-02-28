@@ -1,15 +1,19 @@
 module Compiler.CIL.Compile
 
 import Compiler.CIL.CIL
+import Compiler.CIL.Emit
+import Compiler.CIL.Passes.EtaReduce
+import Compiler.CIL.Passes.LambdaInstantiation
+import Compiler.CIL.Passes.Monomorphise
 import Compiler.Common
 import Core.CompileExpr
 import Core.Context
 import Core.Env
 import Core.FC
+import Data.SortedMap
 import Data.Vect
 import Debug.Trace
 import Idris.Syntax
-import Compiler.CIL.Emit
 
 export
 compileExpr : Ref Ctxt Defs
@@ -21,6 +25,8 @@ compileExpr : Ref Ctxt Defs
            -> Core (Maybe String)
 compileExpr defs s tmpDir outputDir tm outfile = do
   cdata <- getCompileData False Cases tm
+  let mainNamed = ((MN "__main" 0), (EmptyFC, MkNmFun [] (forget cdata.mainExpr)))
+  let mainType = TDelayed EmptyFC LLazy (Erased EmptyFC Placeholder)
   let namedDefs = cdata.namedDefs
   defs <- get Ctxt
   types <- traverse (\(n, _) => lookupCtxtExact n (gamma defs)) namedDefs
@@ -37,9 +43,13 @@ compileExpr defs s tmpDir outputDir tm outfile = do
 
   _ <- pure $ traceVal prettyTypes
 
-  let fnDefs = (\((a, (b,c)), d) => (a, (b,c), d)) <$> zip namedDefs prettyTypes
-  compiledDefs <- compileDefs fnDefs
-  code: List String <-  traverse emitDef $ compiledDefs
+  let fnDefs = (\((a, (b,c)), d) => (a, (b,c), d)) <$> zip (mainNamed :: namedDefs) (mainType :: prettyTypes)
+  (compiledDefs, lamstr) <- compileDefs fnDefs
+  etaReducedDefs <- eta_reduce compiledDefs
+  _ <- pure $ traceVal "-----------------------"
+  (monomorphisedDefs, lamstr) <- monomorphise lamstr etaReducedDefs
+  lambdaInstantitatedDefs <- lambda_instantiate lamstr monomorphisedDefs
+  code: List String <-  traverse emitDef $ lambdaInstantitatedDefs
   traverse_ (coreLift . putStrLn) code
   pure Nothing
 

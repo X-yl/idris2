@@ -10,12 +10,12 @@ import Core.FC
 import Core.Name
 import Core.TT.Binder
 import Core.TT.Term
-import Data.Vect
 import Data.List1
 import Data.SnocList
+import Data.SortedMap
+import Data.Vect
 import Debug.Trace
 import Idris.Syntax
-import Data.SortedMap
 
 %default covering
 
@@ -41,8 +41,8 @@ mutual
   public export
     data CILExpr : Type where
       CILExprCall : FC -> CILExpr -> CILType -> List CILExpr -> List CILType -> CILExpr
-      CILExprOp : {arity: _} -> FC -> PrimFn arity -> Vect arity CILExpr -> CILExpr
-      CILExprConstant : FC -> Constant -> CILExpr
+      CILExprOp : {arity: _} -> FC -> PrimFn arity -> Vect arity CILExpr -> CILType -> CILExpr
+      CILExprConstant : FC -> Constant -> CILType -> CILExpr
       CILExprLocal : FC -> Name -> CILType -> CILExpr
       CILExprStruct : FC -> Name -> CILType -> List CILExpr -> CILExpr
       CILExprRef : FC -> Name -> CILType -> CILExpr
@@ -69,9 +69,9 @@ mutual
   public export
     Show CILExpr where
       show (CILExprCall fc name ty1 args ty2) = assert_total $ "CILCall (" ++ show name ++ " " ++ show args ++ " : " ++ show ty2 ++  ")"
-      show (CILExprOp fc fn args) = assert_total $ "CILOp (" ++ show fn ++ " " ++ (show args) ++ ")"
+      show (CILExprOp fc fn args ty) = assert_total $ "CILOp (" ++ show fn ++ " " ++ (show args) ++ ")"
       show (CILExprLocal fc name ty) = "CILExprLocal (" ++ show name ++ " : " ++ show ty ++ ")"
-      show (CILExprConstant fc c) = "CILConstant (" ++ show c ++ ")"
+      show (CILExprConstant fc c ty) = "CILConstant (" ++ show c ++ ")"
       show (CILExprRef fc name ty) = "CILRef (" ++ show name ++ " : " ++ show ty  ++ ")"
       show (CILExprStruct fc name ty args) = assert_total $ "CILStruct (" ++ show name ++ " " ++ show args ++ " : " ++ show ty ++ ")"
       show (CILExprField fc name ty field) = assert_total $ "CILField (" ++ show name ++ " " ++ show field ++ ")"
@@ -105,6 +105,7 @@ mutual
       CILFn : List CILType -> CILType -> CILType
       CILStruct : Name -> SortedMap Name CILType -> CILType
 
+  public export
   Eq CILType where
     CILU8 == CILU8 = True
     CILU16 == CILU16 = True
@@ -122,6 +123,7 @@ mutual
     CILPtr t == CILPtr t' = assert_total $ t == t'
     _ == _ = False
 
+  public export
   Show CILType where
     show CILU8 = "u8"
     show CILU16 = "u16"
@@ -167,7 +169,7 @@ mutual
     pure (t::rest, rtn)
   fnType (App fc fn arg)        = pure ([], CILDyn)
   fnType (As fc side as pat)    = pure ([], CILDyn)
-  fnType (TDelayed fc lz t)     = pure ([], CILDyn)
+  fnType (TDelayed fc lz t)     = pure ([], !(termToCILType t))
   fnType (TDelay fc lz ty arg)  = pure ([], CILDyn)
   fnType (TForce fc lz t)       = pure ([], CILDyn)
   fnType (t@(PrimVal fc c))     = pure ([], !(termToCILType t))
@@ -195,6 +197,7 @@ data Locals : Type where
 data Lambdas : Type where
 data Structs : Type where
 data Refs : Type where
+data LambdaStructEquiv : Type where
 
 nextLocal : {auto _ : Ref Locals (SortedMap Name CILType)} -> Core Name
 nextLocal = do
@@ -278,25 +281,23 @@ inferOpArgType BelieveMe = CILDyn
 inferOpArgType Crash = CILDyn
 
 
-inferExprType :  {auto _: Ref Locals (SortedMap Name CILType)} ->
-                 {auto _: Ref Structs (SortedMap Name (SortedMap Name CILType))} ->
-                 {auto _: Ref Ctxt Defs} -> {auto _ : Ref Syn SyntaxInfo} -> CILExpr -> Core CILType
+public export
+inferExprType : CILExpr -> Core CILType
 inferExprType (CILExprCall fc x ty1 xs ty2) = do
   case ty1 of
-    CILFn args ret => if length args == length xs
+    CILFn args ret => if length args == length xs || length args == 0
                       then pure ret
                       else pure $ CILFn (drop (length xs) args) ret
     _              => pure CILDyn
-inferExprType (CILExprOp fc f xs) = pure $ inferOpArgType f
-inferExprType (CILExprConstant fc cst) = inferConstType cst
+inferExprType (CILExprOp fc f xs ty) = pure ty
+inferExprType (CILExprConstant fc cst ty) = pure ty
 inferExprType (CILExprLocal fc n ty) = pure ty
 inferExprType (CILExprRef fc n ty) = pure ty
 inferExprType (CILExprStruct fc n ty _) = pure ty
 inferExprType (CILExprField fc n ty f) = do
-  structs <- get Structs
   case ty of
     CILStruct name members => maybe (pure CILDyn) pure (lookup f members)
-    _           => pure CILDyn
+    _           => throw $ InternalError $ "Field access on non-struct type " ++ show ty
 
 inferType : {auto _: Ref Locals (SortedMap Name CILType)} ->
             {auto _: Ref Structs (SortedMap Name (SortedMap Name CILType))} ->
@@ -325,6 +326,7 @@ mutual
          -> {auto _: Ref Refs (SortedMap Name CILType)}
          -> {auto _ : Ref Ctxt Defs}
          -> {auto _: Ref Structs (SortedMap Name (SortedMap Name CILType))}
+         -> {auto _: Ref LambdaStructEquiv (SortedMap Name Name)}
          -> {auto _ : Ref Syn SyntaxInfo}
          -> {auto _ : Ref Lambdas (List CILDef)}
          -> NamedCExp
@@ -341,6 +343,7 @@ mutual
   lambda : {auto _: Ref Locals (SortedMap Name CILType)}
            -> {auto _: Ref Refs (SortedMap Name CILType)}
            -> {auto _: Ref Structs (SortedMap Name (SortedMap Name CILType))}
+           -> {auto _: Ref LambdaStructEquiv (SortedMap Name Name)}
            -> {auto c: Ref Ctxt Defs}
            -> {auto s: Ref Syn SyntaxInfo}
            -> {auto _ : Ref Lambdas (List CILDef) }
@@ -363,10 +366,12 @@ mutual
             update Locals (\x => foldr delete x (keys (fromList $ zip args argTypes)))
             let nextLambda = cast $ 1 + length !(get Lambdas)
             let fnName = MN "lambda" nextLambda
-            let fn = MkCILFun EmptyFC fnName (zip args argTypes) !(inferType body) body
+            update LambdaStructEquiv (insert struct fnName)
+            let fn = MkCILFun EmptyFC fnName (zip args argTypes) (traceVal !(inferType body)) (traceVal body)
             let captureExprs: List CILExpr = map (\(k,v) => CILExprLocal EmptyFC k v) (Data.SortedMap.toList captures)
             pure (CILExprStruct EmptyFC struct structType captureExprs, fn)
 
+  public export
   traverseCIL : (CILExpr -> Core CILExpr) -> CIL e -> Core (CIL e)
   traverseCIL f (CILConstCase e fc sc xs y) = do sc <- f sc
                                                  xs <- traverseList1 (\(MkCILConstAlt e c cexp) =>
@@ -383,8 +388,8 @@ mutual
 
   rewriteCaptures : CILType -> List Name -> Name -> CILExpr -> CILExpr
   rewriteCaptures structType ns rw (CILExprCall fc x ty1 xs ty2) = CILExprCall fc (rewriteCaptures structType ns rw x) ty1 (map (\x => rewriteCaptures structType ns rw x) xs) ty2
-  rewriteCaptures structType ns rw (CILExprOp fc f xs) = CILExprOp fc f (map (\x => rewriteCaptures structType ns rw x) xs)
-  rewriteCaptures structType ns rw c@(CILExprConstant fc cst) = c
+  rewriteCaptures structType ns rw (CILExprOp fc f xs ty) = CILExprOp fc f (map (\x => rewriteCaptures structType ns rw x) xs) ty
+  rewriteCaptures structType ns rw c@(CILExprConstant _ _ _) = c
   rewriteCaptures structType ns rw (CILExprLocal fc n ty) = if n `elem` ns then CILExprField fc (CILExprLocal EmptyFC rw ty) structType n else CILExprLocal fc n ty
   rewriteCaptures structType ns rw (CILExprStruct fc n ty xs) = CILExprStruct fc n ty (map (\x => rewriteCaptures structType ns rw x) xs)
   rewriteCaptures structType ns rw (CILExprRef fc n ty) = CILExprRef fc n ty
@@ -414,9 +419,11 @@ mutual
   extractCaptures ns (NmErased fc) = pure empty
   extractCaptures ns (NmCrash fc str) = pure empty
 
+  public export
   stmt : {auto _: Ref Locals (SortedMap Name CILType)}
          -> {auto _: Ref Refs (SortedMap Name CILType)}
          -> {auto _: Ref Structs (SortedMap Name (SortedMap Name CILType))}
+         -> {auto _: Ref LambdaStructEquiv (SortedMap Name Name)}
          -> {auto c: Ref Ctxt Defs}
          -> {auto s: Ref Syn SyntaxInfo}
          -> {auto _ : Ref Lambdas (List CILDef)}
@@ -440,14 +447,14 @@ mutual
     (calleeStmts, callee) <- lift x
     (argStmts, args) <- unzip <$> traverse lift xs
 
-    ignore $ pure $ traceVal (argStmts, args)
+    ignore $ pure $ (argStmts, args)
 
     pure (prepend (calleeStmts ++ (concat argStmts)) (assign e $ CILExprCall fc callee !(inferExprType callee) args !(traverse inferExprType args)))
-  stmt e (NmCon fc n x tag xs) = do ignore $ pure $ (traceVal n)
+  stmt e (NmCon fc n x tag xs) = do ignore $ pure $ (n)
                                     pure ?ficxme
   stmt e (NmOp fc f xs) = do
     (argStmts, args) <- unzip <$> traverseVect lift xs
-    pure $ prepend (concat argStmts) $ assign e $ CILExprOp fc f args
+    pure $ prepend (concat argStmts) $ assign e $ CILExprOp fc f args (inferOpArgType f)
   stmt e (NmExtPrim fc p xs) = ?stmt_rhs_7
   stmt e (NmForce fc lz x) = ?stmt_rhs_8
   stmt e (NmDelay fc lz x) = ?stmt_rhs_9
@@ -458,8 +465,8 @@ mutual
       | _ => throw $ InternalError "Empty list of alternatives"
     def <- traverseOpt (stmt e) def
     pure $ prepend scStmts $ CILConstCase e fc scExpr alts def
-  stmt e (NmPrimVal fc cst) = pure $ assign e $ CILExprConstant fc cst
-  stmt e (NmErased fc) = pure $ assign e $ CILExprConstant fc (I32 0)
+  stmt e (NmPrimVal fc cst) = pure $ assign e $ CILExprConstant fc cst !(inferConstType cst)
+  stmt e (NmErased fc) = pure $ assign e $ CILExprConstant fc (I32 0) CILI32
   stmt e (NmCrash fc str) = ?stmt_rhs_14
   stmt e (NmLocal fc n) = do
     pure $ assign e $ CILExprLocal fc n !(lookupLocalType n)
@@ -469,22 +476,29 @@ mutual
     structs <- get Structs
     traverse (\(n, m) => pure $ MkCILStruct EmptyFC n m) (Data.SortedMap.toList structs)
 
-
 %hide Libraries.Data.PosMap.infixl.(|>)
-public export compileDefs : {auto c: Ref Ctxt Defs} -> {auto s: Ref Syn SyntaxInfo} -> List (Name, (FC, NamedDef), ClosedTerm) -> Core (List CILDef)
-compileDefs xs = do let nmap = fromList $ !(traverse (\(n, _, ty) => do pure (n, (uncurry CILFn) !(fnType ty))) xs)
-                    (traceVal . concat)
-                      <$> traverse (compileDef nmap) (traceVal xs)
+public export compileDefs : {auto c: Ref Ctxt Defs} -> {auto s: Ref Syn SyntaxInfo} -> List (Name, (FC, NamedDef), ClosedTerm) -> Core (List CILDef, SortedMap Name Name)
+compileDefs xs = do
+  let nmap = fromList $ !(traverse (\(n, _, ty) => do pure (n, (uncurry CILFn) !(fnType ty))) xs)
+  lamdas <- newRef Lambdas []
+  structs <- newRef Structs empty
+  ls <- newRef LambdaStructEquiv empty
+  compiledDefs <- traverse (compileDef nmap) (xs)
+  pure $ (compiledDefs ++ !(get Lambdas) ++ !(compileStructs), !(get LambdaStructEquiv))
   where
-    compileDef : SortedMap Name CILType -> (Name, (FC, NamedDef), ClosedTerm) -> Core $ List CILDef
+    compileDef : {auto _ : Ref Lambdas (List CILDef)}
+      -> {auto _: Ref Structs (SortedMap Name (SortedMap Name CILType))}
+      -> {auto _: Ref LambdaStructEquiv (SortedMap Name Name)}
+      -> SortedMap Name CILType
+      -> (Name, (FC, NamedDef), ClosedTerm)
+      -> Core CILDef
     compileDef types (name, (fc, (MkNmFun args cexp)), type) = do
+      _ <- pure $ traceVal name
       (argTypes, ret) <- fnType type
-      _ <- pure $ (argTypes, ret)
+      _ <- pure $ traceVal (argTypes, ret)
       locals <- newRef Locals empty
-      zip args argTypes |> traverse_ (\(n, t) => updateLocalType n t)
-      lamdas <- newRef Lambdas []
-      structs <- newRef Structs empty
+      zip args argTypes |> traverse_ (\(n, t) => updateLocalType (traceVal n) t)
       refs <- newRef Refs types
       body <- stmt Return (traceVal cexp)
-      pure $ (MkCILFun fc (traceVal name) (zip args argTypes) ret body) :: !(get Lambdas) ++ !(compileStructs)
+      pure $ (MkCILFun fc (traceVal name) (zip args argTypes) ret body)
     compileDef _ (name, (fc, _), type) = pure ?unimplemented
