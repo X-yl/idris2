@@ -299,9 +299,8 @@ inferExprType (CILExprField fc n ty f) = do
     CILStruct name members => maybe (pure CILDyn) pure (lookup f members)
     _           => throw $ InternalError $ "Field access on non-struct type " ++ show ty
 
-inferType : {auto _: Ref Locals (SortedMap Name CILType)} ->
-            {auto _: Ref Structs (SortedMap Name (SortedMap Name CILType))} ->
-            {auto _: Ref Ctxt Defs} -> {auto _ : Ref Syn SyntaxInfo} -> CIL (Just e) -> Core CILType
+public export
+inferType : CIL (Just e) -> Core CILType
 inferType (CILConstCase e fc sc xs y) = do altsTypes <- traverseList1 (\(MkCILConstAlt _ _ x) => inferType x) xs
                                            if all (== head altsTypes) altsTypes
                                              then pure $ head altsTypes

@@ -3,6 +3,7 @@ module Compiler.CIL.Compile
 import Compiler.CIL.CIL
 import Compiler.CIL.Emit
 import Compiler.CIL.Passes.EtaReduce
+import Compiler.CIL.Passes.DeadCodeElim
 import Compiler.CIL.Passes.LambdaInstantiation
 import Compiler.CIL.Passes.Monomorphise
 import Compiler.Common
@@ -49,7 +50,8 @@ compileExpr defs s tmpDir outputDir tm outfile = do
   _ <- pure $ traceVal "-----------------------"
   (monomorphisedDefs, lamstr) <- monomorphise lamstr etaReducedDefs
   lambdaInstantitatedDefs <- lambda_instantiate lamstr monomorphisedDefs
-  code: List String <-  traverse emitDef $ lambdaInstantitatedDefs
+  deadCodeElimd <- elimDeadCode lamstr lambdaInstantitatedDefs
+  code: List String <-  traverse emitDef $ deadCodeElimd
   traverse_ (coreLift . putStrLn) code
   pure Nothing
 
