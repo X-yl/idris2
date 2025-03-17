@@ -337,6 +337,7 @@ mutual
     updateLocalType local !(inferType st)
     def <- pure ([!(declare st)], CILExprLocal EmptyFC local !(inferType st))
     pure $ case st of
+      CILAssign _ _ (CILExprStruct _ _ _ _) => def -- Structs must be lifted.
       CILAssign _ _ expr => ([], expr)
       _                  => def
 

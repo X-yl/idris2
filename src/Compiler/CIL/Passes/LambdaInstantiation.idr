@@ -22,15 +22,18 @@ lambda_instantiate_expr lamstr defs c@(CILExprCall fc callee ty args argTys) = a
       let Just fn = lookup fnName defs
       lamType@(CILFn lamArgs return) <- fnType fn
       let callee' = CILExprRef fc fnName lamType
+      stType : Maybe CILType <- case lamArgs of 
+        [] => throw $ InternalError "Lambda without struct argument?"
+        ((st@(CILStruct _ _)) :: xs) => pure $ Just st
+        _ => pure Nothing
+      let args = case stType of
+                  Just st => CILExprLocal fc (UN $ mkUserName "c") st :: args
+                  Nothing => args
       pure $ CILExprCall fc callee' lamType args argTys
     _ => pure c
     where fnType : CILDef -> Core CILType
           fnType (MkCILFun _ _ args return _) = pure $ CILFn (snd <$> args) return
           fnType (MkCILStruct _ _ _) = throw $ InternalError "Structs cannot be called"
--- lambda_instantiate_expr lamstr defs c@(CILExprCall fc callee ty args argTys) = assert_total $ do
---   ty <- inferExprType callee
---   _ <- pure $ traceVal $ "!!!!!! " ++ show callee ++ " : " ++ show ty
---   pure c
 lambda_instantiate_expr lamstr defs c = pure c
 
 lambda_instantiate_def : SortedMap Name Name -> SortedMap Name CILDef -> CILDef -> Core CILDef

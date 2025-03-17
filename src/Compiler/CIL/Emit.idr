@@ -100,8 +100,8 @@ mutual
   --                                               emit ") "
   --                                               emitExpr x
   --         cast' from to x | _ = throw $ InternalError "unhandled cast"
-          
-    
+
+
 
   emitArgs : {auto _: Ref OutputRef String} -> List (Name, CILType) -> Core ()
   emitArgs xs = emit . concat $ intersperse ", " (emitArg <$> xs)
@@ -158,7 +158,7 @@ mutual
   emitOp Crash            = ?emitOp_rhs_38
 
   emitExpr : {auto _: Ref OutputRef String} -> CILExpr -> Core ()
-  emitExpr (CILExprCall fc x ty1 xs ty2) = do 
+  emitExpr (CILExprCall fc x ty1 xs ty2) = do
                                       emit "("
                                       emitExpr x
                                       emit ")("
@@ -168,9 +168,7 @@ mutual
   emitExpr (CILExprConstant fc cst ty) = emitConst cst
   emitExpr (CILExprLocal fc n ty) = emit $ cName n
   emitExpr (CILExprRef fc n ty) = emit $ cName n
-  emitExpr (CILExprStruct fc n ty args) = do emit "struct "
-                                             emit $ cName n
-                                             emit " { "
+  emitExpr (CILExprStruct fc n ty args) = do emit " { "
                                              ignore . sequence $ intersperse (emit ", ") (emitExpr <$> args)
                                              emit " } "
   emitExpr (CILExprField fc n ty f) = do emit "("
@@ -231,19 +229,17 @@ mutual
   emitStmt (CILReturn fc x) = do emit "return "
                                  emitExpr x
                                  emit ";\n"
+  emitStmt (CILDeclare fc ty n (CILAssign _ _ assignee)) = do
+    emit (cType ty)
+    emit " "
+    emit (cName n)
+    emit " = "
+    emitExpr assignee
+    emit ";\n"
   emitStmt (CILDeclare fc ty n x) = do
-    case ty of
-      CILFn args ret => do
-        emit (cType ret)
-        emit " (*"
-        emit (cName n)
-        emit ")("
-        ignore . sequence $ intersperse (emit ", ") (emit . cType <$> args)
-        emit ");\n"
-        emitStmt x
-      _ => do
-        emit (cType ty)
-        emit " "
-        emit (cName n)
-        emit ";\n"
-        emitStmt x
+    emit (cType ty)
+    emit " "
+    emit (cName n)
+    emit ";\n"
+    emitStmt x
+
