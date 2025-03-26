@@ -5,6 +5,7 @@
 module Compiler.CIL.Passes.Monomorphise
 
 import Compiler.CIL.CIL
+import Data.Vect
 import Compiler.Common
 import Compiler.Common
 import Core.Context

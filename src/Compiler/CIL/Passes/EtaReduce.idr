@@ -32,6 +32,3 @@ eta_reduce : List CILDef -> Core (List CILDef)
 eta_reduce defs = do
   let defMap = fromList (zip (getName <$> defs) defs)
   traverse (eta_reduce_defs defMap) defs
-  where getName : CILDef -> Name
-        getName (MkCILFun _ n _ _ _) = n
-        getName (MkCILStruct _ n _) = n

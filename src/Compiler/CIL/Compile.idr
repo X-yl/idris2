@@ -15,6 +15,7 @@ import Data.SortedMap
 import Data.Vect
 import Debug.Trace
 import Idris.Syntax
+import Libraries.Utils.Path
 
 export
 compileExpr : Ref Ctxt Defs

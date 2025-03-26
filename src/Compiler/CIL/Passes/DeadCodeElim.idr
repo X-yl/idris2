@@ -16,10 +16,6 @@ data Refs : Type where
 data Seen : Type where
 data Lambdas : Type where
 
-getName : CILDef -> Name
-getName (MkCILFun _ n _ _ _) = n
-getName (MkCILStruct _ n _) = n
-
 mutual
     goExpr : {auto _ : Ref Seen (SortedMap Name Bool)} 
             -> {auto _ : Ref Refs (SortedMap Name CILDef)}
@@ -51,6 +47,9 @@ mutual
     goExpr expr@(CILExprField fc x y n) = do
         _ <- goExpr x
         pure expr
+    goExpr expr@(CILExprTaggedUnion fc n t k xs) = do
+        _ <- traverse goExpr xs
+        pure expr
 
     go : {auto _ : Ref Seen (SortedMap Name Bool)} 
         -> {auto _ : Ref Refs (SortedMap Name CILDef)}
@@ -76,6 +75,7 @@ mutual
                             | _ => throw (InternalError "Ref not found")
                         go ref
                     Nothing => pure ()
+    go _ = pure ()
 
 public export
 elimDeadCode : SortedMap Name Name -> List CILDef -> Core (List CILDef)

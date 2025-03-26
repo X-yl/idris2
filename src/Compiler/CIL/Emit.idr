@@ -6,6 +6,7 @@ import Core.Context
 import Data.List1
 import Data.SortedMap
 import Data.Vect
+import Protocol.Hex
 
 cType : CILType -> String
 cType CILU8 = "uint8_t"
@@ -23,6 +24,7 @@ cType CILWorld = "void*"
 cType CILDyn = "Value*"
 cType (CILFn args ret) = cType ret ++ " (*)(" ++ concat (intersperse ", " (cType <$> args)) ++ ")"
 cType (CILStruct name members) = "struct " ++ cName name
+cType (CILTaggedUnion name kinds) = "struct " ++ cName name
 
 data OutputRef : Type where
 
@@ -30,39 +32,83 @@ mutual
   emit : {auto p: Ref OutputRef String} -> (s: String) -> Core ()
   emit s = update OutputRef (\a => a ++ s)
 
+  emitField : {auto p: Ref OutputRef String} -> (Name, CILType) -> Core ()
+  emitField (name, ty) = do
+    emit (cType ty)
+    emit " "
+    emit (cName name)
+
   public export
-  emitDef : CILDef -> Core String
-  emitDef def = do
-    p <- newRef OutputRef ""
-    emitDef' def
-    p <- get OutputRef
-    pure $ p
-    where emitDef' : {auto _: Ref OutputRef String} -> CILDef -> Core ()
-          emitDef' (MkCILFun fc name args ret body) = do
-              emit (cType ret)
-              emit " "
-              emit (cName name)
-              emit "("
-              emitArgs args
-              emit ") {\n"
-              emitStmt body
-              emit "}\n"
-          emitDef' (MkCILStruct fc name fields) = do
-              emit "struct "
-              emit (cName name)
-              emit " { "
-              ignore . sequence $ intersperse (emit ", ") (emitField <$> Data.SortedMap.toList fields)
-              emit " };\n"
-              where emitField : (Name, CILType) -> Core ()
-                    emitField (name, ty) = do
-                      emit (cType ty)
-                      emit " "
-                      emit (cName name)
+  emitDefs : List CILDef -> Core String
+  emitDefs xs = do
+    _ <- newRef OutputRef ""
+    -- Sort structs first
+    let (structs, fns) = partition isStructOrTagUnion xs
+    emit "#include <stdint.h>\n"
+    emit "#include <stdbool.h>\n"
+    emit "#include <stddef.h>\n\n"
+    emit "typedef struct Value {} Value;\n\n\n"
+    traverse_ (emitDef) structs
+    traverse_ emitHeaders xs
+    traverse_ (emitDef) fns
+    emit "int main() {\n"
+    emit "  return (int) __main_0(); \n"
+    emit "}\n"
+    get OutputRef
+    where isStructOrTagUnion : CILDef -> Bool
+          isStructOrTagUnion (MkCILStruct _ _ _) = True
+          isStructOrTagUnion (MkCILTaggedUnion _ _ _) = True
+          isStructOrTagUnion _ = False
 
+  emitDef : {auto _: Ref OutputRef String} -> CILDef -> Core ()
+  emitDef (MkCILFun fc name args ret body) = do
+      emit (cType ret)
+      emit " "
+      emit (cName name)
+      emit "("
+      emitArgs args
+      emit ") {\n"
+      emitStmt body
+      emit "}\n"
+  emitDef (MkCILStruct fc name fields) = do
+      emit "struct "
+      emit (cName name)
+      emit " { "
+      traverse_ (\x => emitField x >> emit "; ") (Data.SortedMap.toList fields)
+      emit " };\n"
+  emitDef (MkCILTaggedUnion fc name kinds) = do
+      emit "struct "
+      emit (cName name)
+      emit " { \n"
+      emit " int64_t tag; \n"
+      emit " union { \n"
+      ignore . sequence $ ((\kind => do
+          (CILStruct tagname fields) <- pure kind
+            | _ => throw $ InternalError "kind is not a struct"
+          emit "struct "
+          emit (cName name)
+          emit " { "
+          _ <- traverse_ (\x => emitField x >> emit "; ") (Data.SortedMap.toList fields)
+          emit " } "
+          emit (cName tagname)
+          emit "; \n\n"
+        ) <$> kinds)
+      emit " };\n"
+      emit " };\n"
+  emitDef _ = pure ()
 
-  -- cast : {auto _: Ref OutputRef String} -> CILType ->  CILExpr -> Core ()
-  -- cast to expr = do cast' !(inferExprType expr) to expr
-  -- where cast' : CILType -> CILType -> CILExpr -> Core ()
+  emitHeaders : {auto _: Ref OutputRef String} -> CILDef -> Core ()
+  emitHeaders (MkCILFun fc n args return body) = do
+    emit (cType return)
+    emit " "
+    emit (cName n)
+    emit "("
+    emitArgs args
+    emit ");\n"
+  emitHeaders (MkCILStruct fc n members) = pure () -- Struct defs emitted elsewhere
+  emitHeaders _ = pure ()
+
+  --: CILType -> CILType -> CILExpr -> Core ()
   --       cast' from to x with (from == to)
   --         _                   | True =  emitExpr x
   --         cast' from CILU8 x  | _ = do emit "(uint8_t) "
@@ -101,7 +147,21 @@ mutual
   --                                               emitExpr x
   --         cast' from to x | _ = throw $ InternalError "unhandled cast"
 
-
+  cStringQuoted : String -> String
+  cStringQuoted cs = strCons '"' (showCString (unpack cs) "\"")
+  where
+      showCChar : Char -> String -> String
+      showCChar '\\' = ("\\\\" ++)
+      showCChar c
+        = if c < chr 32
+              then (("\\x" ++ leftPad '0' 2 (asHex (cast c))) ++ "\"\"" ++)
+              else if c < chr 127 then strCons c
+              else if c < chr 65536 then (("\\u" ++ leftPad '0' 4 (asHex (cast c))) ++ "\"\"" ++)
+              else (("\\U" ++ leftPad '0' 8 (asHex (cast c))) ++ "\"\"" ++)
+      showCString : List Char -> String -> String
+      showCString [] = id
+      showCString ('"'::cs) = ("\\\"" ++) . showCString cs
+      showCString (c ::cs) = (showCChar c) . showCString cs
 
   emitArgs : {auto _: Ref OutputRef String} -> List (Name, CILType) -> Core ()
   emitArgs xs = emit . concat $ intersperse ", " (emitArg <$> xs)
@@ -155,7 +215,7 @@ mutual
   emitOp DoubleCeiling    = ?emitOp_rhs_35
   emitOp (Cast pty pty1)  = ?emitOp_rhs_36
   emitOp BelieveMe        = ?emitOp_rhs_37
-  emitOp Crash            = ?emitOp_rhs_38
+  emitOp Crash            = \_ =>  emit "abort()"
 
   emitExpr : {auto _: Ref OutputRef String} -> CILExpr -> Core ()
   emitExpr (CILExprCall fc x ty1 xs ty2) = do
@@ -175,6 +235,9 @@ mutual
                                          emitExpr n
                                          emit ")."
                                          emit $ cName f
+  emitExpr (CILExprTaggedUnion fc n ty k args) = do emit " { "
+                                                    ignore . sequence $ intersperse (emit ", ") (emitExpr <$> args)
+                                                    emit " } "
 
   covering
   emitConst : {auto _: Ref OutputRef String} -> Constant -> Core ()
@@ -188,9 +251,7 @@ mutual
   emitConst (B16 i) = emit (show i)
   emitConst (B32 i) = emit (show i)
   emitConst (B64 i) = emit (show i)
-  emitConst (Str str) = do emit "\""
-                           emit str
-                           emit "\""
+  emitConst (Str str) = emit (cStringQuoted str)
   emitConst (Ch c) = do emit "'"
                         emit $ show c
                         emit "'"
@@ -242,4 +303,16 @@ mutual
     emit (cName n)
     emit ";\n"
     emitStmt x
-
+  emitStmt (CILConCase e fc sc xs) = do
+    emit "switch ("
+    emitExpr sc
+    emit ") {\n"
+    traverseList1_ emitConAlt xs
+    emit "}\n"
+    where emitConAlt : CILConAlt e -> Core ()
+          emitConAlt (MkCILConAlt _ tag body) = do
+            emit "case "
+            emit (show tag)
+            emit ":\n"
+            emitStmt body
+            emit "break;\n"
