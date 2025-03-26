@@ -21,30 +21,63 @@ import Data.List1
 data LambdaStructEquiv : Type where
 data MonoDefs : Type where
 
-getName : CILDef -> Name
-getName (MkCILFun _ n _ _ _) = n
-getName (MkCILStruct _ n _) = n
+data FixedDecls : Type where
 
+assign_types_expr : { auto _ : Ref FixedDecls (SortedMap Name CILType)} -> CILExpr -> Core CILExpr
+assign_types_expr (CILExprLocal fc n x) = do
+  fixedDecls <- get FixedDecls
+  case lookup n fixedDecls of
+    Just t => pure $ CILExprLocal fc n t
+    Nothing => pure $ CILExprLocal fc n x
+assign_types_expr (CILExprCall fc x y xs ys) = do
+  x' <- assign_types_expr x
+  xs' <- traverse assign_types_expr xs
+  pure $ CILExprCall fc x' !(inferExprType x') xs' !(traverse inferExprType xs')
+assign_types_expr (CILExprOp fc f xs x) = do 
+  xs' <- traverseVect assign_types_expr xs
+  pure $ CILExprOp fc f xs' x
+assign_types_expr (CILExprStruct fc n x xs) = do
+  xs' <- traverse assign_types_expr xs
+  pure $ CILExprStruct fc n x xs'
+assign_types_expr (CILExprField fc x y n) = do 
+  x' <- assign_types_expr x
+  pure $ CILExprField fc x' y n
+assign_types_expr (CILExprTaggedUnion fc n t k xs) = do
+  xs' <- traverse assign_types_expr xs
+  pure $ CILExprTaggedUnion fc n t k xs'
+assign_types_expr c = pure c
 
-assign_types : CIL e  -> Core (CIL e)
+assign_types : { auto _ : Ref FixedDecls (SortedMap Name CILType)} -> CIL e  -> Core (CIL e, Bool)
 assign_types (CILConstCase x fc sc xs y) = do
-  xscil <- traverseList1 assign_types (map (\(MkCILConstAlt _ _ c) => c) xs)
+  sc' <- assign_types_expr sc
+  (xscil, changed) <- unzip <$> traverseList1 assign_types (map (\(MkCILConstAlt _ _ c) => c) xs)
   let xs' = zipWith (\(MkCILConstAlt e n _), x => MkCILConstAlt e n x) xs xscil
   y' <- traverseOpt assign_types y
-  pure $ CILConstCase x fc sc xs' y'
+  case y' of
+    Just (y'', changed2) => pure $ (CILConstCase x fc sc' xs' (Just y''), changed2 || (any id changed))
+    Nothing => pure $ (CILConstCase x fc sc' xs' Nothing, any id changed)
 assign_types (CILBlock fc xs x) = do
-  xs' <- traverse assign_types xs
-  x' <- assign_types x
-  pure $ CILBlock fc xs' x'
+  (xs', changed) <- unzip <$> traverse assign_types xs
+  (x', changed2) <- assign_types x
+  pure $ (CILBlock fc xs' x', (changed2 || (any id changed)))
 assign_types (CILDeclare fc x n y) = do
   x' <- inferType y
-  pure $ CILDeclare fc x' n y 
-assign_types c = pure c
+  update FixedDecls (insert n x')
+  _ <- if x /= x' then pure $ traceVal $ "Changed " ++ show x ++ " to " ++ show x' else pure ""
+  pure $ (CILDeclare fc x' n y, x /= x')
+assign_types (CILReturn fc ex) = pure ((CILReturn fc !(assign_types_expr ex)), False)
+assign_types (CILAssign fc n x) = pure ((CILAssign fc n !(assign_types_expr x)), False)
+assign_types (CILConCase fc e sc xs) = do
+  sc' <- assign_types_expr sc
+  (xscil, changed) <- unzip <$> traverseList1 assign_types (map (\(MkCILConAlt _ _ c) => c) xs)
+  let xs' = zipWith (\(MkCILConAlt e n _), x => MkCILConAlt e n x) xs xscil
+  pure $ (CILConCase fc e sc' xs', any id changed)
 
 mutual 
   recompile_def : {auto _ : Ref LambdaStructEquiv (SortedMap Name Name)} -> {auto _ : Ref MonoDefs (List CILDef)} -> (SortedMap Name CILDef) -> CILDef -> List CILType -> Core CILDef
   recompile_def defs fn@(MkCILFun fc n fnArgs return body) actualArgs =
     if (snd <$> fnArgs) /= actualArgs then do
+      _ <- pure $ traceVal $ "Recompiling function: " ++ show n ++ " ! " ++ show (snd <$> fnArgs) ++ " vs. " ++ show actualArgs 
       let fnArgMap = fromList fnArgs
       let actualArgMap = fromList (zip (fst <$> fnArgs) actualArgs)
       body' <- traverseCIL (recompile_expr defs fnArgMap actualArgMap) body
@@ -74,6 +107,7 @@ mutual
       let name' = MN (show n) (cast $ length !(get MonoDefs))
       pure $ MkCILStruct fc name' (fromList members')
     else pure st
+  recompile_def defs d args = pure d
             
 
   monomorphise_expr : {auto _ : Ref LambdaStructEquiv (SortedMap Name Name)} -> {auto _ : Ref MonoDefs (List CILDef)} -> SortedMap Name CILDef -> CILExpr -> Core CILExpr
@@ -83,12 +117,18 @@ mutual
       let monoDefMap = fromList $ (\x => (getName x, x)) <$> monoDefs
       let Just fn = lookup n (mergeLeft defs monoDefMap)
           | _ => throw $ InternalError $ "Function"  ++ show n ++  "not found in " ++ show  (mergeLeft defs monoDefMap)
-      args <- traverse (monomorphise_expr defs) args
-      fn'@(MkCILFun fc n' args' return' body') <- recompile_def defs fn arg_types
-      if n /= n' then do
-          update MonoDefs (fn' ::)
-          pure (CILExprCall fc (CILExprRef fc1 n' y) ty args arg_types) 
-        else pure call
+      case fn of
+        fn@(MkCILFun _ _ _ _ _) => do
+          _ <- pure $ traceVal $ "args " ++ show args
+          args <- traverse (monomorphise_expr defs) args
+          _ <- pure $ traceVal $ "finished args"
+          fn'@(MkCILFun fc n' args' return' body') <- recompile_def defs fn arg_types
+          if n /= n' then do
+              _ <- pure $ traceVal $ "Changed " ++ show n ++ " to " ++ show n'
+              update MonoDefs (fn' ::)
+              pure (CILExprCall fc (CILExprRef fc1 n' y) ty args arg_types) 
+            else pure call
+        _ => pure call -- Foreign functions are not monomorphised
   monomorphise_expr defs s@(CILExprStruct fc n ty members) = assert_total $ do
       monoDefs <- get MonoDefs
       let monoDefMap = fromList $ (\x => (getName x, x)) <$> monoDefs
@@ -112,9 +152,18 @@ mutual
 
 monomorphise_def : {auto _ : Ref MonoDefs (List CILDef)} -> {auto _ : Ref LambdaStructEquiv (SortedMap Name Name)} -> SortedMap Name CILDef -> CILDef -> Core CILDef
 monomorphise_def defs (MkCILFun fc n args return body) = do
+  _ <- pure $ traceVal $ "Monomorphising function: " ++ show n ++ " !"
   body' <- traverseCIL (monomorphise_expr defs) body
-  body' <- assign_types body'
-  pure $ (MkCILFun fc n args return body')
+  _ <- newRef FixedDecls empty
+  (body',changed) <- assign_types body'
+  -- fixme: This is a hack to recompile the definition after fixing assign_types.
+  --        Instead of vaguely recompiling we should pass through the types that changed.
+  monodefs <- get MonoDefs
+  let monodefmap = fromList $ (\x => (getName x, x)) <$> monodefs
+  if changed 
+    then do _ <- pure $ traceVal $ "Remonorphising function: " ++ show n ++ " !"
+            assert_total $ monomorphise_def (mergeLeft defs monodefmap) (MkCILFun fc n args return body')
+    else pure $ MkCILFun fc n args return body'
 monomorphise_def _ struct = pure struct
 
 public export
@@ -122,6 +171,7 @@ monomorphise : SortedMap Name Name -> List CILDef -> Core (List CILDef, SortedMa
 monomorphise = repeat_monomorphisation empty
     where repeat_monomorphisation : SortedMap Name CILDef -> SortedMap Name Name -> List CILDef -> Core (List CILDef, SortedMap Name Name)
           repeat_monomorphisation otherdefs lamstr defs = do
+            _ <- pure $ traceVal $ "Monomorphising " ++ show (getName <$> defs)
             monoDefs <- newRef MonoDefs []
             lamRef <- newRef LambdaStructEquiv lamstr
             let defMap = mergeLeft otherdefs $ fromList (zip (getName <$> defs) defs)
