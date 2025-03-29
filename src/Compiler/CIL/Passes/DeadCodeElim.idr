@@ -49,6 +49,15 @@ mutual
         pure expr
     goExpr expr@(CILExprTaggedUnion fc n t k xs) = do
         _ <- traverse goExpr xs
+        Just str <- pure (lookup n !(get Refs))
+            | _ => throw (InternalError "Struct not found")
+        go str
+        pure expr
+    goExpr expr@(CILExprSizeof fc x) = do
+        _ <- goExpr x
+        pure expr
+    goExpr expr@(CILExprAddrof fc x) = do
+        _ <- goExpr x
         pure expr
 
     go : {auto _ : Ref Seen (SortedMap Name Bool)} 
@@ -65,17 +74,13 @@ mutual
     go (MkCILStruct fc n members) = do
         if lookup n !(get Seen) == Just True 
             then pure ()
-            else do
-                update Seen (insert n True)
-                lambdas <- get Lambdas
-                case lookup n lambdas of
-                    Just fn => do
-                        refs <- get Refs
-                        Just ref <- pure (lookup fn refs)
-                            | _ => throw (InternalError "Ref not found")
-                        go ref
-                    Nothing => pure ()
-    go _ = pure ()
+            else do update Seen (insert n True)
+    go (MkCILTaggedUnion fc n kinds) = do
+        update Seen (insert n True)
+        pure ()
+    go (MkCILForeign fc n _ _ _) = do
+        update Seen (insert n True)
+        pure ()
 
 public export
 elimDeadCode : SortedMap Name Name -> List CILDef -> Core (List CILDef)

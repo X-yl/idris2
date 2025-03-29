@@ -49,6 +49,8 @@ mutual
       CILExprRef : FC -> Name -> CILType -> CILExpr
       CILExprField : FC -> CILExpr -> CILType -> Name -> CILExpr
       CILExprTaggedUnion : FC -> Name -> CILType -> Int -> List CILExpr -> CILExpr
+      CILExprSizeof : FC -> CILExpr -> CILExpr
+      CILExprAddrof : FC -> CILExpr -> CILExpr
 
   public export
     data CILConstAlt : (e: Effect) -> Type where
@@ -86,15 +88,17 @@ mutual
       show (CILExprConstant fc c ty) = "CILConstant (" ++ show c ++ ")"
       show (CILExprRef fc name ty) = "CILRef (" ++ show name ++ " : " ++ show ty  ++ ")"
       show (CILExprStruct fc name ty args) = assert_total $ "CILStruct (" ++ show name ++ " " ++ show args ++ " : " ++ show ty ++ ")"
-      show (CILExprField fc name ty field) = assert_total $ "CILField (" ++ show name ++ " " ++ show field ++ ")"
+      show (CILExprField fc name ty field) = assert_total $ "CILField (" ++ show name ++ " " ++ show field ++ " : " ++ show ty ++ ")"
       show (CILExprTaggedUnion fc name ty kind args) = assert_total $ "CILTaggedUnion (" ++ show name ++ " " ++ show kind ++ " " ++ show args ++ ")"
+      show (CILExprSizeof fc expr) = assert_total $ "sizeof (" ++ show expr ++ ")"
+      show (CILExprAddrof fc expr) = assert_total $ "&(" ++ show expr ++ ")"
 
   public export
     data CILDef : Type where
       MkCILFun : FC -> Name -> (args: List (Name, CILType)) -> (return: CILType) -> (body: CIL (Just Return)) -> CILDef
       MkCILStruct : FC -> Name -> (members: SortedMap Name CILType) -> CILDef
       MkCILTaggedUnion : FC -> Name -> (kinds: List (CILType)) -> CILDef -- a tagged union is a union of structs
-      MkCILForeign : FC -> Name -> (args: List CILType) -> (return: CILType) -> CILDef
+      MkCILForeign : FC -> Name -> (args: List CILType) -> (return: CILType) -> (external: String) -> CILDef
 
   covering
   public export
@@ -102,7 +106,7 @@ mutual
       show (MkCILFun fc name args ret body) = assert_total $ "MkCILFun (" ++ show name ++ " " ++ show args ++ " " ++ show ret ++ " " ++ show body ++ ")"
       show (MkCILStruct fc name members) = assert_total $ "MkCILStruct (" ++ show name ++ " " ++ show members ++ ")"
       show (MkCILTaggedUnion fc name kinds) = assert_total $ "MkCILTaggedUnion (" ++ show name ++ " " ++ show kinds ++ ")"
-      show (MkCILForeign fc name args ret) = assert_total $ "MkCILForeign (" ++ show name ++ " " ++ show args ++ " " ++ show ret ++ ")"
+      show (MkCILForeign fc name args external ret) = assert_total $ "MkCILForeign (" ++ show name ++ " " ++ show args ++ " " ++ show ret ++ " : " ++ show external ++ ") "
 
   public export
     data CILType : Type where
@@ -143,6 +147,42 @@ mutual
     CILTaggedUnion name kinds == CILTaggedUnion name' kinds' = assert_total $ name == name' && kinds == kinds'
     _ == _ = False
 
+  typeTag : CILType -> Int
+  typeTag CILU8 = 0
+  typeTag CILU16 = 1
+  typeTag CILU32 = 2
+  typeTag CILU64 = 3
+  typeTag CILI8 = 4
+  typeTag CILI16 = 5
+  typeTag CILI32 = 6
+  typeTag CILI64 = 7
+  typeTag CILF32 = 8
+  typeTag CILF64 = 9
+  typeTag CILWorld = 10
+  typeTag CILDyn = 11
+  typeTag (CILFn _ _) = 12
+  typeTag (CILPtr _) = 13
+  typeTag (CILStruct _ _) = 14
+  typeTag (CILTaggedUnion _ _) = 15
+
+  public export
+  Ord CILType where
+    compare x y = if x == y then EQ else compare' x y
+      where
+        compare' : CILType -> CILType -> Ordering
+        compare' (CILFn args ret) (CILFn args' ret') = assert_total $ compare (args, ret) (args', ret')
+        compare' (CILPtr t) (CILPtr t') = assert_total $ compare t t'
+        compare' (CILStruct name members) (CILStruct name' members') =
+          assert_total $ case compare name name' of
+            EQ => compare (Data.SortedMap.toList members) (toList members')
+            x => x
+        compare' (CILTaggedUnion name kinds) (CILTaggedUnion name' kinds') =
+          assert_total $ case compare name name' of
+            EQ => compare kinds kinds'
+            x => x
+        compare' x y = assert_total $ compare (typeTag x) (typeTag y)
+
+
   public export
   Show CILType where
     show CILU8 = "u8"
@@ -162,6 +202,7 @@ mutual
     show ((CILStruct name members)) = assert_total $ "{" ++ show name ++ show members ++ "}"
     show (CILTaggedUnion name kinds) = assert_total $ "TaggedUnion " ++ show name ++ " " ++ show kinds
 
+public export
 inferPrimType : PrimType -> CILType
 inferPrimType IntType = CILI32
 inferPrimType Int8Type = CILI8
@@ -173,8 +214,8 @@ inferPrimType Bits8Type = CILU8
 inferPrimType Bits16Type = CILU16
 inferPrimType Bits32Type = CILU32
 inferPrimType Bits64Type = CILU64
-inferPrimType StringType = CILPtr CILU8
-inferPrimType CharType = CILI32
+inferPrimType StringType = CILPtr CILI8
+inferPrimType CharType = CILI8
 inferPrimType DoubleType = CILF64
 inferPrimType WorldType = CILWorld
 
@@ -183,7 +224,7 @@ getName : CILDef -> Name
 getName (MkCILFun _ n _ _ _) = n
 getName (MkCILStruct _ n _) = n
 getName (MkCILTaggedUnion _ n _) = n
-getName (MkCILForeign _ n _ _) = n
+getName (MkCILForeign _ n _ _ _) = n
 
 record DataCon where
   constructor MkDataCon
@@ -191,9 +232,10 @@ record DataCon where
   tag   : Int
   arity : Nat
   type  : ClosedTerm
+  flags : List DefFlag
 
 Show DataCon where
-  show (MkDataCon n t a ty) = assert_total $  "MkDataCon " ++ show n ++ " " ++ show t ++ " " ++ show a ++ " " ++ show ty
+  show (MkDataCon n t a ty flags) = assert_total $  "MkDataCon " ++ show n ++ " " ++ show t ++ " " ++ show a ++ " " ++ show ty ++ show flags
 
 getCons :
           Defs -> Name -> Core (List DataCon)
@@ -210,10 +252,41 @@ getCons defs tn
                   | _ => pure Nothing
              case (gdef.definition, gdef.type) of
                   (DCon t arity _, ty) =>
-                        pure . Just $ MkDataCon cn t arity ty
+                        pure . Just $ MkDataCon cn t arity ty gdef.flags
                   _ => pure Nothing
 
+isNat : List DefFlag -> Bool
+isNat [] = False
+isNat ((ConType ZERO) :: xs) = True
+isNat ((ConType SUCC) :: xs) = True
+isNat ((ConType _) :: xs) = False
+isNat (_ :: xs) = isNat xs
+
+isUnit : List DefFlag -> Bool
+isUnit [] = False
+isUnit ((ConType UNIT) :: xs) = True
+isUnit ((ConType _) :: xs) = False
+isUnit (_ :: xs) = isUnit xs
+
 mutual
+  public export
+  inferConstType : Constant -> Core CILType
+  inferConstType (I i) = pure CILI64
+  inferConstType (I8 i) = pure CILI8
+  inferConstType (I16 i) = pure CILI16
+  inferConstType (I32 i) = pure CILI32
+  inferConstType (I64 i) = pure CILI64
+  inferConstType (BI i) = pure CILI64
+  inferConstType (B8 m) = pure CILU8
+  inferConstType (B16 m) = pure CILU16
+  inferConstType (B32 m) = pure CILU32
+  inferConstType (B64 m) = pure CILU64
+  inferConstType (Str str) = pure (CILPtr CILU8)
+  inferConstType (Ch c) = pure CILU8
+  inferConstType (Db dbl) = pure CILF64
+  inferConstType (PrT ty) = pure $ inferPrimType ty
+  inferConstType WorldVal = pure CILWorld
+
   fnType : {auto c : Ref Ctxt Defs} -> Term _ -> Core (List CILType, CILType)
   fnType = fnType' []
 
@@ -224,31 +297,32 @@ mutual
     t <- (case b of
               Pi fc rc info type  => termToCILType seen type
               _                   => pure CILDyn)
+    _ <- pure $ "Bind " ++ show t
     (rest, rtn) <- fnType' seen scope
     pure (t::rest, rtn)
   fnType' _ (App fc fn arg)        = do
-    _ <- pure $ traceVal $ "App "
     let isIO = case fn of
             Ref _ _ n => (show n) == "PrimIO.IO" || (show n) == "PrimIO.PrimIO"
             _ => False
     if isIO
-      then pure ([CILWorld], CILWorld)
+      then pure ([CILWorld], CILDyn)
       else pure ([], CILDyn)
-  fnType' _ (As fc side as pat)    = pure ([], CILDyn)
-  fnType' seen (TDelayed fc lz t)  = pure ([], !(termToCILType seen t))
-  fnType' _ (TDelay fc lz ty arg)  = pure ([], CILDyn)
-  fnType' _ (TForce fc lz t)       = pure ([], CILDyn)
-  fnType' seen (t@(PrimVal fc c))  = pure ([], !(termToCILType seen t))
-  fnType' seen r@(Ref fc (TyCon tag arity) n) = pure ([], !(termToCILType seen r))
+  fnType' _ (As fc side as pat)    =  pure ([], CILDyn)
+  fnType' seen (TDelayed fc lz t)  =  pure ([], !(termToCILType seen t))
+  fnType' _ (TDelay fc lz ty arg)  =  pure ([], CILDyn)
+  fnType' _ (TForce fc lz t)       =  pure ([], CILDyn)
+  fnType' seen (t@(PrimVal fc c))  =  pure ([], !(termToCILType seen t))
+  fnType' seen r@(Ref fc (TyCon tag arity) n) =  pure ([], !(termToCILType seen r))
   fnType' _ (Ref fc (DataCon t a) name) = do
     _ <- pure $ traceVal $ "DataCon " ++ show name
     pure ([], CILDyn)
-  fnType' _ (Ref fc nt name)       = pure ([], CILDyn)
-  fnType' _ (Erased fc why)        = pure ([], CILDyn)
-  fnType' _ (TType fc n)           = pure ([], CILDyn)
+  fnType' _ (Ref fc nt name)       =  pure ([], CILDyn)
+  fnType' _ (Erased fc why)        =  pure ([], CILDyn)
+  fnType' _ (TType fc n)           =  pure ([], CILDyn)
 
   termToCILType : {auto c : Ref Ctxt Defs} -> (seen: List Name) -> Term _ -> Core CILType
-  termToCILType _ (PrimVal fc (PrT x)) = pure $ inferPrimType x
+  termToCILType _ (PrimVal fc (PrT x)) =  pure $  inferPrimType x
+  termToCILType _ (PrimVal fc x) =  inferConstType (traceVal x)
   termToCILType seen term@(Bind _ _ _ _) = do (args, ret) <- (fnType' seen term)
                                               pure $ CILFn args ret
   termToCILType seen (Ref fc (TyCon tag arity) n) = do
@@ -256,29 +330,34 @@ mutual
     n' <- case !(lookupCtxtExact n (gamma defs)) of
             Just x => pure $ traceVal $ fullname x
             _ => throw $ InternalError $ "Type constructor " ++ show n ++ " not found"
+    _ <- pure $ traceVal $ "Type constructor " ++ show n' ++ " : " ++ show seen
     if n' `elem` seen
       then pure CILDyn -- Recursion detected, so use a boxed type.
       else do
         defs <- get Ctxt
         cons <- getCons defs n'
-        if all (\(MkDataCon _ _ a _) => a == 0) cons
-          then pure CILU64 -- Enum type
-          else do
-            (consArgs, _) <- unzip <$> traverse (\(MkDataCon _ _ _ ty) => fnType' (n' :: seen) ty) cons
-            let indexes = allFins (length consArgs)
-            asStructs <- traverse (\(i,members) => do
-                let indexes = (cast . finToInteger) <$> allFins (length members)
-                let memMap = fromList $ zip (map (MN "arg") indexes) members
-                pure $ CILStruct (MN (show n' ++ "_tag") (cast $ finToInteger i)) memMap
-              ) (zip indexes consArgs)
-            let tagUnionType = CILTaggedUnion n' asStructs
-            pure tagUnionType
-  termToCILType _ _ = pure CILDyn
+        if all (\(MkDataCon _ _ _ _ flags) => isUnit flags) cons
+          then pure CILWorld
+          else if (all (\(MkDataCon _ _ a _ _) => a == 0) cons) || (all (\(MkDataCon _ _ _ _ flags) => isNat flags) cons)
+            then pure CILU64 -- Enum type or Nat
+            else do
+              (consArgs, _) <- unzip <$> traverse (\(MkDataCon _ _ _ ty _) => fnType' (n' :: seen) ty) cons
+              let indexes = allFins (length consArgs)
+              asStructs <- traverse (\(i,members) => do
+                  let indexes = (cast . finToInteger) <$> allFins (length members)
+                  let memMap = fromList $ zip (map (MN "arg") indexes) members
+                  pure $ CILStruct (MN ("tag") (cast $ finToInteger i)) memMap
+                ) (zip indexes consArgs)
+              let tagUnionType = CILTaggedUnion n' asStructs
+              pure tagUnionType
+  termToCILType seen x = pure CILDyn
+
 
 data Locals : Type where
 data Lambdas : Type where
 data Structs : Type where
 data TagUnions : Type where
+data ConstructorMap : Type where
 data Refs : Type where
 data LambdaStructEquiv : Type where
 
@@ -303,23 +382,6 @@ nextStruct membs = do
   let next = cast $ 1 + length (Data.SortedMap.toList ns)
   update Structs $ insert (MN "struct" next) membs
   pure $ MN "struct" next
-
-inferConstType : {auto _: Ref Ctxt Defs} -> Constant -> Core CILType
-inferConstType (I i) = pure CILI64
-inferConstType (I8 i) = pure CILI8
-inferConstType (I16 i) = pure CILI16
-inferConstType (I32 i) = pure CILI32
-inferConstType (I64 i) = pure CILI64
-inferConstType (BI i) = pure CILI64
-inferConstType (B8 m) = pure CILU8
-inferConstType (B16 m) = pure CILU16
-inferConstType (B32 m) = pure CILU32
-inferConstType (B64 m) = pure CILU64
-inferConstType (Str str) = pure (CILPtr CILU8)
-inferConstType (Ch c) = pure CILU8
-inferConstType (Db dbl) = pure CILF64
-inferConstType a@(PrT _) = let q: ClosedTerm = (PrimVal EmptyFC a) in pure . CILPtr $ !(termToCILType [] q)
-inferConstType WorldVal = pure CILWorld
 
 inferOpArgType : PrimFn a -> CILType
 inferOpArgType (Add ty) = inferPrimType ty
@@ -376,7 +438,7 @@ inferExprType (CILExprConstant fc cst ty) = pure ty
 inferExprType (CILExprLocal fc n ty) = pure ty
 inferExprType (CILExprRef fc n ty) = pure ty
 inferExprType (CILExprStruct fc n ty _) = pure ty
-inferExprType (CILExprField fc n ty f) = do
+inferExprType exp@(CILExprField fc n ty f) = do
   case ty of
     CILStruct name members => maybe (pure CILDyn) pure (lookup f members)
     CILTaggedUnion _ kinds =>
@@ -385,12 +447,12 @@ inferExprType (CILExprField fc n ty f) = do
         (MN "tag" tag) => do
           Just i <- pure $ natToFin (cast tag) (length kinds)
             | _ => throw $ InternalError $ "tag out of bounds " ++ show tag
-          (CILStruct _ members) <- pure $ (index' kinds i)
-            | _ => throw $ InternalError "Tagged union with non-struct kind"
-          maybe (pure CILDyn) pure (lookup f members)
+          pure (index' kinds i)
         _ => throw $ InternalError $ "Tag union field access on non-tag field " ++ show f
-    _           => throw $ InternalError $ "Field access on non-struct/tag union type " ++  show ty
+    _           => throw $ InternalError $ "Field access on non-struct " ++ show exp
 inferExprType (CILExprTaggedUnion fc n ty k xs) = pure ty
+inferExprType (CILExprSizeof fc expr) = pure CILU64
+inferExprType (CILExprAddrof fc expr) = pure $ CILPtr !(inferExprType expr)
 
 public export
 inferType : CIL (Just e) -> Core CILType
@@ -406,7 +468,7 @@ inferType (CILConCase e fc sc xs) = do altsTypes <- traverseList1 (\(MkCILConAlt
                                          then pure $ head altsTypes
                                          else pure CILDyn
 
-export
+public export
 declare : {auto _: Ref Locals (SortedMap Name CILType)} ->
           {auto _: Ref Structs (SortedMap Name (SortedMap Name CILType))} ->
           {auto _: Ref Ctxt Defs} ->
@@ -418,6 +480,7 @@ declare : {auto _: Ref Locals (SortedMap Name CILType)} ->
 declare (CILBlock fc ss s)              = pure $ CILBlock fc ss $ !(declare s)
 declare s                               = pure $ CILDeclare EmptyFC !(inferType s) v s
 
+public export
 prepend : (List (CIL Nothing)) -> CIL (Just e) -> CIL (Just e)
 prepend [] x = x
 prepend xs x = CILBlock EmptyFC xs x
@@ -436,6 +499,11 @@ assign Return expr@(CILExprStruct _ _ _ _) = do
   updateLocalType local !(inferExprType expr)
   let assignment = CILAssign EmptyFC local expr
   pure $ prepend [!(declare assignment)] $ CILReturn EmptyFC (CILExprLocal EmptyFC local !(inferExprType expr))
+assign Return expr@(CILExprTaggedUnion _ _ _ _ _) = do
+  local <- nextLocal
+  updateLocalType local !(inferExprType expr)
+  let assignment = CILAssign EmptyFC local expr
+  pure $ prepend [!(declare assignment)] $ CILReturn EmptyFC (CILExprLocal EmptyFC local !(inferExprType expr))
 assign Return expr = pure $ CILReturn EmptyFC expr
 
 mutual
@@ -445,6 +513,7 @@ mutual
          -> {auto _: Ref Structs (SortedMap Name (SortedMap Name CILType))}
          -> {auto _: Ref LambdaStructEquiv (SortedMap  Name Name)}
          -> {auto _ : Ref TagUnions (SortedMap Name CILType)}
+         -> {auto _: Ref ConstructorMap (SortedMap Name Name)}
          -> {auto _ : Ref Syn SyntaxInfo}
          -> {auto _ : Ref Lambdas (List CILDef)}
          -> NamedCExp
@@ -455,7 +524,6 @@ mutual
     updateLocalType local !(inferType st)
     def <- pure ([!(declare st)], CILExprLocal EmptyFC local !(inferType st))
     pure $ case st of
-      CILAssign _ _ (CILExprStruct _ _ _ _) => def -- Structs must be lifted.
       CILAssign _ _ expr => ([], expr)
       _                  => def
 
@@ -464,6 +532,7 @@ mutual
            -> {auto _: Ref Structs (SortedMap Name (SortedMap Name CILType))}
            -> {auto _: Ref LambdaStructEquiv (SortedMap Name Name)}
            -> {auto _ : Ref TagUnions (SortedMap Name CILType)}
+           -> {auto _: Ref ConstructorMap (SortedMap Name Name)}
            -> {auto c: Ref Ctxt Defs}
            -> {auto s: Ref Syn SyntaxInfo}
            -> {auto _ : Ref Lambdas (List CILDef) }
@@ -509,6 +578,7 @@ mutual
                                                                 (MkCILConAlt e t) <$> traverseCIL f cexp) xs
                                              pure $ CILConCase e fc sc xs
 
+
   rewriteCaptures : CILType -> List Name -> Name -> CILExpr -> CILExpr
   rewriteCaptures structType ns rw (CILExprCall fc x ty1 xs ty2) = CILExprCall fc (rewriteCaptures structType ns rw x) ty1 (map (\x => rewriteCaptures structType ns rw x) xs) ty2
   rewriteCaptures structType ns rw (CILExprOp fc f xs ty) = CILExprOp fc f (map (\x => rewriteCaptures structType ns rw x) xs) ty
@@ -518,6 +588,8 @@ mutual
   rewriteCaptures structType ns rw (CILExprRef fc n ty) = CILExprRef fc n ty
   rewriteCaptures structType ns rw (CILExprField fc x ty n1) = CILExprField fc (rewriteCaptures structType ns rw x) ty n1
   rewriteCaptures structType ns rw (CILExprTaggedUnion fc n ty k xs) = CILExprTaggedUnion fc n ty k (map (\x => rewriteCaptures structType ns rw x) xs)
+  rewriteCaptures structType ns rw (CILExprSizeof fc expr) = CILExprSizeof fc (rewriteCaptures structType ns rw expr)
+  rewriteCaptures structType ns rw (CILExprAddrof fc expr) = CILExprAddrof fc (rewriteCaptures structType ns rw expr)
 
   extractCaptures : {auto _ : Ref Locals (SortedMap Name CILType)}
                     -> {auto _ : Ref Ctxt Defs}
@@ -537,7 +609,9 @@ mutual
   extractCaptures ns (NmExtPrim fc p xs) = ?extractCaptures_rhs_7
   extractCaptures ns (NmForce fc lz x) = ?extractCaptures_rhs_8
   extractCaptures ns (NmDelay fc lz x) = ?extractCaptures_rhs_9
-  extractCaptures ns (NmConCase fc sc xs x) = ?extractCaptures_rhs_10
+  extractCaptures ns (NmConCase fc sc xs x) = do a <- extractCaptures ns sc
+                                                 b <- foldl mergeLeft empty <$> traverse (\(MkNConAlt _ _ _ args cexp) => extractCaptures (args ++ ns) cexp) xs
+                                                 pure $ mergeLeft a b
   extractCaptures ns (NmConstCase fc sc xs x) = do a <- extractCaptures ns sc
                                                    b <- foldl mergeLeft empty <$> traverse (\(MkNConstAlt c cexp) => extractCaptures ns cexp) xs
                                                    c <- foldl mergeLeft empty <$> traverseOpt (extractCaptures ns) x
@@ -551,6 +625,7 @@ mutual
          -> {auto _: Ref Refs (SortedMap Name CILType)}
          -> {auto _: Ref Structs (SortedMap Name (SortedMap Name CILType))}
          -> {auto _: Ref TagUnions (SortedMap Name CILType)}
+         -> {auto _: Ref ConstructorMap (SortedMap Name Name)}
          -> {auto _: Ref LambdaStructEquiv (SortedMap Name Name)}
          -> {auto c: Ref Ctxt Defs}
          -> {auto s: Ref Syn SyntaxInfo}
@@ -582,12 +657,15 @@ mutual
   stmt e (NmCon fc n x tag xs) = do
     case tag of
       Just t => do
+        consMap <- get ConstructorMap
+        Just tuName <- pure $ lookup n consMap
+          | _ => throw $ InternalError $ "Constructor " ++ show n ++ " not found in" ++ show consMap
         (argStmts, args) <- unzip <$> traverse lift xs
         tu <- get TagUnions
-        ty' <- case (Data.SortedMap.lookup n tu) of
+        ty' <- case (Data.SortedMap.lookup tuName tu) of
                 Just ty => pure ty
-                _       => throw $ InternalError $ "Tagged union " ++ show n ++ " not found in" ++ show tu
-        let expr = CILExprTaggedUnion EmptyFC n ty' t args
+                _       => throw $ InternalError $ "Tagged union " ++ show tuName ++ " not found in" ++ show tu
+        let expr = CILExprTaggedUnion EmptyFC tuName ty' t args
         pure $ prepend (concat argStmts) !(assign e expr)
       Nothing => do
         pure $ ?nontaggedstruct
@@ -601,11 +679,20 @@ mutual
     tu <- get TagUnions
     Just (MkNConAlt n _ _ _ _) <- pure $ head' xs
       | _ => throw $ InternalError "Empty list of alternatives"
-    Just tuType <- pure $ Data.SortedMap.lookup n tu
-      | _ => throw $ InternalError $ "Tagged union " ++ show n ++ " not found in " ++ show tu
+    consMap <- get ConstructorMap
+    Just tuName <- pure $ lookup n consMap
+      | _ => throw $ InternalError $ "Constructor " ++ show n ++ " not found in" ++ show consMap
+    Just tuType <- pure $ Data.SortedMap.lookup tuName tu
+      | _ => throw $ InternalError $ "Tagged union " ++ show tuName ++ " not found in " ++ show tu
     (CILTaggedUnion _ kinds) <- pure tuType
       | _ => throw $ InternalError "impossible: non tagged union in TagUnions"
-    (scStmts, scExpr) <- lift sc
+
+    local <- nextLocal
+    st <- stmt (Assign local) sc
+    updateLocalType local !(inferType st)
+    scStmt <- declare st
+    let scExpr = CILExprLocal EmptyFC local !(inferType st)
+
     let scExpr' = CILExprField EmptyFC scExpr tuType (UN $ mkUserName "tag")
     Just alts <- Data.List1.fromList <$> traverse (\(MkNConAlt n ci tag args cexp) => do
         case tag of
@@ -623,6 +710,7 @@ mutual
                     Just ikind <- pure $ natToFin (cast t) (length kinds)
                       | _ => throw $ InternalError "impossible: tag out of bounds"
                     let argsType = index' kinds ikind
+                    _ <- pure $ traceVal $ "argsType of " ++ show name ++ " is " ++ show argsType
                     let arg  = CILExprField EmptyFC args (argsType) (MN "arg" (cast $ finToInteger iarg))
                     assignment <- assign (Assign name) arg
                     _ <- updateLocalType name !(inferExprType arg)
@@ -637,7 +725,7 @@ mutual
           Nothing => throw $ InternalError "Non-tagged union"
         ) xs
       | _ => throw $ InternalError "Empty list of alternatives"
-    pure $ prepend scStmts $ CILConCase e fc scExpr' alts
+    pure $ prepend [scStmt] $ CILConCase e fc scExpr' alts
   stmt e (NmConstCase fc sc xs def) = do
     (scStmts, scExpr) <- lift sc
     altCILs <- traverse (\(MkNConstAlt c cexp) => do (stmts, expr) <- lift cexp
@@ -660,7 +748,7 @@ mutual
     traverse (\(n, m) => pure $ MkCILStruct EmptyFC n m) (Data.SortedMap.toList structs)
 
 foreignToCIL : CFType -> CILType
-foreignToCIL CFUnit = CILU8
+foreignToCIL CFUnit = CILWorld
 foreignToCIL CFInt = CILI32
 foreignToCIL CFInteger = CILI64
 foreignToCIL CFInt8 = CILI8
@@ -671,7 +759,7 @@ foreignToCIL CFUnsigned8 = CILU8
 foreignToCIL CFUnsigned16 = CILU16
 foreignToCIL CFUnsigned32 = CILU32
 foreignToCIL CFUnsigned64 = CILU64
-foreignToCIL CFString = CILPtr CILU8
+foreignToCIL CFString = CILPtr CILI8
 foreignToCIL CFDouble = CILF64
 foreignToCIL CFChar = CILU8
 foreignToCIL CFPtr = CILPtr CILU8
@@ -695,8 +783,10 @@ compileDefs xs = do
   structs <- newRef Structs empty
   ls <- newRef LambdaStructEquiv empty
   tu <- newRef TagUnions empty
+  consmap <- newRef ConstructorMap empty
   let (structDefs,others ) = partition (\(_, (_, def), _) => case def of
                                                                 MkNmCon _ _ _ => True
+
                                                                 _ => False) xs
   compiledDefs <- catMaybes <$> traverse (compileDef nmap) (structDefs ++ others)
   pure $ (compiledDefs ++ !(get Lambdas) ++ !(compileStructs), !(get LambdaStructEquiv))
@@ -704,6 +794,7 @@ compileDefs xs = do
     compileDef : {auto _ : Ref Lambdas (List CILDef)}
       -> {auto _: Ref Structs (SortedMap Name (SortedMap Name CILType))}
       -> {auto _: Ref LambdaStructEquiv (SortedMap Name Name)}
+      -> {auto _: Ref ConstructorMap (SortedMap Name Name)}
       -> {auto _: Ref TagUnions (SortedMap Name CILType)}
       -> SortedMap Name CILType
       -> (Name, (FC, NamedDef), ClosedTerm)
@@ -717,16 +808,21 @@ compileDefs xs = do
       body <- stmt Return (traceVal cexp)
       pure $ Just (MkCILFun fc (name) (zip args argTypes) ret body)
     compileDef _ (name, (fc, ((MkNmForeign ccs fargs ftype))), type) = do
-      pure $ Just (MkCILForeign fc name (map foreignToCIL fargs) (foreignToCIL ftype))
+      Just (_, (ext :: otherOpts)) <- pure $ parseCC ["RefC", "C"] ccs
+        | _ => throw $ InternalError $ "Foreign function " ++ show name ++ " not in C: " ++ show ccs
+      pure $ Just (MkCILForeign fc name (map foreignToCIL fargs) (foreignToCIL ftype) ext)
     compileDef _ (name, (fc, (MkNmCon tag arity nt)), type) = do
+      _ <- pure $ traceVal $ "DEF: " ++ show name ++ " - " ++ show type
       (_, tuType) <- fnType type
-      _ <- pure $ traceVal $ "Tagged union " ++ show name ++ " " ++ show tuType
-      update TagUnions (insert name tuType)
-      kinds <- case tuType of
-                  CILTaggedUnion _ k => pure k
-                  _ => throw $ InternalError $ "impossible: " ++ show tuType
-
-      pure $ Just (MkCILTaggedUnion fc name kinds)
+      CILTaggedUnion tuName kinds <- pure tuType
+        | _ => throw $ InternalError $ "impossible: Inferred type not a tagged union " ++ show tuType ++ " " ++ show name
+      update ConstructorMap (insert name tuName)
+      tus <- get TagUnions
+      case lookup tuName tus of
+        Just _ => pure $ Nothing
+        Nothing => do
+          update TagUnions (insert tuName tuType)
+          pure $ Just (MkCILTaggedUnion fc tuName kinds)
     compileDef _ _ = do
       pure $ Nothing
 

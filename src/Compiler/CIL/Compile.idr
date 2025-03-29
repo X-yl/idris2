@@ -3,9 +3,12 @@ module Compiler.CIL.Compile
 import Compiler.CIL.CIL
 import Compiler.CIL.Emit
 import Compiler.CIL.Passes.EtaReduce
+import Compiler.CIL.Passes.StrengthenReturns
 import Compiler.CIL.Passes.DeadCodeElim
 import Compiler.CIL.Passes.LambdaInstantiation
 import Compiler.CIL.Passes.Monomorphise
+import Compiler.CIL.Passes.Box
+import Compiler.CIL.Passes.Unbox
 import Compiler.Common
 import Core.CompileExpr
 import Core.Context
@@ -48,12 +51,22 @@ compileExpr defs s tmpDir outputDir tm outfile = do
   let fnDefs = (\((a, (b,c)), d) => (a, (b,c), d)) <$> zip (mainNamed :: namedDefs) (mainType :: prettyTypes)
   (compiledDefs, lamstr) <- compileDefs fnDefs
   etaReducedDefs <- eta_reduce compiledDefs
+  strengthenedDefs <- strengthenReturns etaReducedDefs
+  -- (coreLift . putStrLn) (show strengthenedDefs)
   _ <- pure $ traceVal "-----------------------"
-  (monomorphisedDefs, lamstr) <- monomorphise lamstr etaReducedDefs
+  (monomorphisedDefs, lamstr) <- monomorphise lamstr strengthenedDefs
   lambdaInstantitatedDefs <- lambda_instantiate lamstr monomorphisedDefs
-  deadCodeElimd <- elimDeadCode lamstr lambdaInstantitatedDefs
-  code: List String <-  traverse emitDef $ deadCodeElimd
-  traverse_ (coreLift . putStrLn) code
+  -- (coreLift . putStrLn) (show lambdaInstantitatedDefs)
+  reStrengthenedDefs <- strengthenReturns lambdaInstantitatedDefs
+  deadCodeElimd <- elimDeadCode lamstr reStrengthenedDefs
+  (coreLift . putStrLn) (show deadCodeElimd)
+  boxd <- boxDefs deadCodeElimd
+  unboxd <- unboxDefs boxd
+  code: String <-  emitDefs unboxd
+  (coreLift . putStrLn) code
+  let cfile = outputDir </> outfile ++ ".c"
+  coreLift $ putStrLn $ "Writing to " ++ cfile
+  writeFile cfile code
   pure Nothing
 
 executeExpr : Ref Ctxt Defs
