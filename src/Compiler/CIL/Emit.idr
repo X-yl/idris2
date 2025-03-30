@@ -4,9 +4,12 @@ import Compiler.CIL.CIL
 import Compiler.RefC.RefC
 import Core.Context
 import Data.List1
+import Data.List
 import Data.SortedMap
 import Data.Vect
 import Protocol.Hex
+
+%default covering
 
 cType : CILType -> String
 cType CILU8 = "uint8_t"
@@ -27,46 +30,94 @@ cType (CILStruct name members) = "struct " ++ cName name
 cType (CILTaggedUnion name kinds) = "struct " ++ cName name
 
 data OutputRef : Type where
+data ConstructorNames : Type where
+
+ConsMap : Type
+ConsMap = SortedMap Name (List Name)
+
+emit : {auto p: Ref OutputRef String} -> (s: String) -> Core ()
+emit s = update OutputRef (\a => a ++ s)
+
+emitField : {auto p: Ref OutputRef String} -> (Name, CILType) -> Core ()
+emitField (name, ty) = do
+  emit (cType ty)
+  emit " "
+  emit (cName name)
+
+emitConstructorDefine : {auto _ : Ref ConstructorNames ConsMap} -> {auto _: Ref OutputRef String} -> Name -> Name -> CILType -> Int ->  Core ()
+emitConstructorDefine tu cons argTy index = do
+  emit "#define "
+  emit (cName cons)
+  emit "("
+  CILStruct tagname fields <- pure argTy
+    | _ => throw $ InternalError "argTy is not a struct"
+  let argNames = map (\i => MN "arg" (cast $ finToInteger i)) (allFins (length $ Data.SortedMap.toList fields))
+  traverse_ emit $ intersperse ", " (cName <$> argNames)
+  emit ") "
+  emit "((struct "
+  emit (cName tu)
+  emit "){ "
+  emit " .tag = "
+  emit (show index)
+  emit ", ."
+  emit (cName tagname)
+  emit " = { "
+  traverse_ emit $ intersperse ", " (cName <$> argNames)
+  emit " } })\n"
+  update ConstructorNames (update (Just . (maybe [cons] (++ [cons]))) tu)
+
+emitArgs : {auto _: Ref OutputRef String} -> List (Name, CILType) -> Core ()
+emitArgs xs = emit . concat $ intersperse ", " (emitArg <$> xs)
+  where emitArg : (Name, CILType) -> String
+        emitArg (name, t) = cType t ++ " " ++ cName name
+
+emitHeaders : {auto _: Ref OutputRef String} -> CILDef -> Core ()
+emitHeaders (MkCILFun fc n args return body) = do
+  emit (cType return)
+  emit " "
+  emit (cName n)
+  emit "("
+  emitArgs args
+  emit ");\n"
+emitHeaders (MkCILStruct fc n members) = pure () -- Struct defs emitted elsewhere
+emitHeaders _ = pure ()
+
+cStringQuoted : String -> String
+cStringQuoted cs = strCons '"' (showCString (unpack cs) "\"")
+where
+    showCChar : Char -> String -> String
+    showCChar '\\' = ("\\\\" ++)
+    showCChar c
+      = if c < chr 32
+            then (("\\x" ++ leftPad '0' 2 (asHex (cast c))) ++ "\"\"" ++)
+            else if c < chr 127 then strCons c
+            else if c < chr 65536 then (("\\u" ++ leftPad '0' 4 (asHex (cast c))) ++ "\"\"" ++)
+            else (("\\U" ++ leftPad '0' 8 (asHex (cast c))) ++ "\"\"" ++)
+    showCString : List Char -> String -> String
+    showCString [] = id
+    showCString ('"'::cs) = ("\\\"" ++) . showCString cs
+    showCString (c ::cs) = (showCChar c) . showCString cs
+
+emitConst : {auto _: Ref OutputRef String} -> Constant -> Core ()
+emitConst (I i) = emit (show i)
+emitConst (I8 i) = emit (show i)
+emitConst (I16 i) = emit (show i)
+emitConst (I32 i) = emit (show i)
+emitConst (I64 i) = emit (show i)
+emitConst (BI i) = emit (show i)
+emitConst (B8 i) = emit (show i)
+emitConst (B16 i) = emit (show i)
+emitConst (B32 i) = emit (show i)
+emitConst (B64 i) = emit (show i)
+emitConst (Str str) = emit (cStringQuoted str)
+emitConst (Ch c) = do emit $ show c
+emitConst (Db dbl) = emit (show dbl)
+emitConst (PrT pty) = emit "FIXME"
+emitConst WorldVal = emit "NULL"
 
 mutual
-  emit : {auto p: Ref OutputRef String} -> (s: String) -> Core ()
-  emit s = update OutputRef (\a => a ++ s)
 
-  emitField : {auto p: Ref OutputRef String} -> (Name, CILType) -> Core ()
-  emitField (name, ty) = do
-    emit (cType ty)
-    emit " "
-    emit (cName name)
-
-  public export
-  emitDefs : List CILDef -> Core String
-  emitDefs xs = do
-    _ <- newRef OutputRef ""
-    -- Sort structs first
-    let (priority, fns) = partition isPriority xs
-    emit "#include <stdint.h>\n"
-    emit "#include <stdbool.h>\n"
-    emit "#include <stddef.h>\n\n"
-    emit "#include <string.h>\n"
-    emit "#include <math.h>\n"
-    emit "#include <stdlib.h>\n"
-    emit "#include <idris_support.h>\n"
-    emit "typedef struct Value {} Value;\n\n"
-    traverse_ (emitDef) priority
-    traverse_ emitHeaders xs
-    traverse_ (emitDef) fns
-    emit "int main() {\n"
-    emit "  __main_0();\n";
-    emit "  return 0;\n"
-    emit "}\n"
-    get OutputRef
-    where isPriority : CILDef -> Bool
-          isPriority (MkCILStruct _ _ _) = True
-          isPriority (MkCILTaggedUnion _ _ _) = True
-          isPriority (MkCILForeign _ _ _ _ _) = True
-          isPriority _ = False
-
-  emitDef : {auto _: Ref OutputRef String} -> CILDef -> Core ()
+  emitDef : {auto _ : Ref ConstructorNames ConsMap} -> {auto _: Ref OutputRef String} -> CILDef -> Core ()
   emitDef (MkCILFun fc name args ret body) = do
       emit (cType ret)
       emit " "
@@ -82,7 +133,7 @@ mutual
       emit " { "
       traverse_ (\x => emitField x >> emit "; ") (Data.SortedMap.toList fields)
       emit " };\n"
-  emitDef (MkCILTaggedUnion fc name kinds) = do
+  emitDef (MkCILTaggedUnion fc name datacons kinds) = do
       emit "struct "
       emit (cName name)
       emit " { \n"
@@ -99,7 +150,11 @@ mutual
           emit "; \n"
         ) <$> kinds)
       emit "  };\n"
-      emit "};\n"
+      emit "};\n\n"
+      ignore . sequence $ (\(a,b,c) => emitConstructorDefine name a b (cast $ finToInteger c))
+                            <$> (zip3 datacons kinds (allFins (length datacons)))
+      emit "\n"
+
   emitDef (MkCILForeign fc name args ret external) = do
       emit (cType ret)
       emit " "
@@ -126,89 +181,14 @@ mutual
             ignore . sequence $ intersperse (emit ", ") (emit . cName <$> argNames)
             emit ");\n"
 
-
-
-  emitHeaders : {auto _: Ref OutputRef String} -> CILDef -> Core ()
-  emitHeaders (MkCILFun fc n args return body) = do
-    emit (cType return)
-    emit " "
-    emit (cName n)
-    emit "("
-    emitArgs args
-    emit ");\n"
-  emitHeaders (MkCILStruct fc n members) = pure () -- Struct defs emitted elsewhere
-  emitHeaders _ = pure ()
-
-  --: CILType -> CILType -> CILExpr -> Core ()
-  --       cast' from to x with (from == to)
-  --         _                   | True =  emitExpr x
-  --         cast' from CILU8 x  | _ = do emit "(uint8_t) "
-  --                                      emitExpr x
-  --         cast' from CILU16 x | _ = do emit "(uint16_t) "
-  --                                      emitExpr x
-  --         cast' from CILU32 x | _ = do emit "(uint32_t) "
-  --                                      emitExpr x
-  --         cast' from CILU64 x | _ = do emit "(uint64_t) "
-  --                                      emitExpr x
-  --         cast' from CILI8 x  | _ = do emit "(int8_t) "
-  --                                      emitExpr x
-  --         cast' from CILI16 x | _ = do emit "(int16_t) "
-  --                                      emitExpr x
-  --         cast' from CILI32 x | _ = do emit "(int32_t) "
-  --                                     > emitExpr x
-  --         cast' from CILI64 x | _ = do emit "(int64_t) "
-  --                                      emitExpr x
-  --         cast' from CILF32 x | _ = do emit "(float) "
-  --                                      emitExpr x
-  --         cast' from CILF64 x | _ = do emit "(double) "
-  --                                      emitExpr x
-  --         cast' from (CILPtr y) x | _ = do emit "("
-  --                                          emit (cType (CILPtr y))
-  --                                          emit ") "
-  --                                          emitExpr x
-  --         cast' from CILWorld x | _ = do emit "(void*) "
-  --                                        emitExpr x
-  --         cast' from CILDyn x | _ = ?
-  --         cast' CILDyn (CILFn xs y) x | _ = ?
-  --         cast' (CILFn ys z) (CILFn xs y) x | _ = ?
-  --         cast' (CILStruct n z) (CILFn xs y) x | _ = ?
-  --         cast' from (CILStruct n y) x | _ = do emit "("
-  --                                               emit (cType (CILStruct n y))
-  --                                               emit ") "
-  --                                               emitExpr x
-  --         cast' from to x | _ = throw $ InternalError "unhandled cast"
-
-
-  cStringQuoted : String -> String
-  cStringQuoted cs = strCons '"' (showCString (unpack cs) "\"")
-  where
-      showCChar : Char -> String -> String
-      showCChar '\\' = ("\\\\" ++)
-      showCChar c
-        = if c < chr 32
-              then (("\\x" ++ leftPad '0' 2 (asHex (cast c))) ++ "\"\"" ++)
-              else if c < chr 127 then strCons c
-              else if c < chr 65536 then (("\\u" ++ leftPad '0' 4 (asHex (cast c))) ++ "\"\"" ++)
-              else (("\\U" ++ leftPad '0' 8 (asHex (cast c))) ++ "\"\"" ++)
-      showCString : List Char -> String -> String
-      showCString [] = id
-      showCString ('"'::cs) = ("\\\"" ++) . showCString cs
-      showCString (c ::cs) = (showCChar c) . showCString cs
-
-  emitArgs : {auto _: Ref OutputRef String} -> List (Name, CILType) -> Core ()
-  emitArgs xs = emit . concat $ intersperse ", " (emitArg <$> xs)
-    where emitArg : (Name, CILType) -> String
-          emitArg (name, t) = cType t ++ " " ++ cName name
-
-
-  emitBinOp : {auto _: Ref OutputRef String} -> String -> Vect 2 CILExpr -> Core ()
+  emitBinOp : {auto _ : Ref ConstructorNames ConsMap} -> {auto _: Ref OutputRef String} -> String -> Vect 2 CILExpr -> Core ()
   emitBinOp op (a::b::Nil) = do
     emit "("
     ignore . sequence $ intersperse (emit " ") [emitExpr a, emit op, emitExpr b]
     emit ")"
 
 
-  emitOp : {auto _: Ref OutputRef String} -> PrimFn arity -> Vect arity CILExpr -> Core ()
+  emitOp : {auto _ : Ref ConstructorNames ConsMap} -> {auto _: Ref OutputRef String} -> PrimFn arit -> Vect arit CILExpr -> Core ()
   emitOp (Add ty)         = emitBinOp "+"
   emitOp (Sub ty)         = emitBinOp "-"
   emitOp (Mul ty)         = emitBinOp "*"
@@ -270,7 +250,7 @@ mutual
   emitOp BelieveMe        = ?emitOp_rhs_37
   emitOp Crash            = \_ =>  emit "abort()"
 
-  emitExpr : {auto _: Ref OutputRef String} -> CILExpr -> Core ()
+  emitExpr : {auto _ : Ref ConstructorNames ConsMap} -> {auto _: Ref OutputRef String} -> CILExpr -> Core ()
   emitExpr (CILExprCall fc x ty1 xs ty2) = do
                                       emit "("
                                       emitExpr x
@@ -291,17 +271,19 @@ mutual
                                          emit ")."
                                          emit $ cName f
   emitExpr (CILExprTaggedUnion fc n ty k args) = do
-    emit "(struct "
-    emit (cName n)
-    emit "){ "
-    emit " .tag = "
-    emit (show k)
-    emit ", "
-    emit " .tag_"
-    emit (show k)
-    emit " = { "
+    consMap <- get ConstructorNames
+    let Just allcons = lookup n consMap
+      | _ => throw $ InternalError "No constructor found for tagged union"
+
+    -- Note the constructor names are stored in reverse order.
+    let Just i = natToFin (cast k) (length allcons)
+      | _ => throw $ InternalError "Invalid constructor index"
+
+    let cons = index' allcons i
+    emit (cName cons)
+    emit "("
     ignore . sequence $ intersperse (emit ", ") (emitExpr <$> args)
-    emit " } }"
+    emit ")"
   emitExpr (CILExprSizeof fc expr) = do
     emit "sizeof("
     emitExpr expr
@@ -310,25 +292,7 @@ mutual
     emit "&"
     emitExpr expr
 
-  covering
-  emitConst : {auto _: Ref OutputRef String} -> Constant -> Core ()
-  emitConst (I i) = emit (show i)
-  emitConst (I8 i) = emit (show i)
-  emitConst (I16 i) = emit (show i)
-  emitConst (I32 i) = emit (show i)
-  emitConst (I64 i) = emit (show i)
-  emitConst (BI i) = emit (show i)
-  emitConst (B8 i) = emit (show i)
-  emitConst (B16 i) = emit (show i)
-  emitConst (B32 i) = emit (show i)
-  emitConst (B64 i) = emit (show i)
-  emitConst (Str str) = emit (cStringQuoted str)
-  emitConst (Ch c) = do emit $ show c
-  emitConst (Db dbl) = emit (show dbl)
-  emitConst (PrT pty) = emit "FIXME"
-  emitConst WorldVal = emit "NULL"
-
-  emitConstAlt : {auto _: Ref OutputRef String} -> CILConstAlt e -> Core ()
+  emitConstAlt : {auto _ : Ref ConstructorNames ConsMap} -> {auto _: Ref OutputRef String} -> CILConstAlt e -> Core ()
   emitConstAlt (MkCILConstAlt e x y) = do emit "case "
                                           emitConst x
                                           emit ":\n"
@@ -336,7 +300,7 @@ mutual
                                           case e of
                                             Return => pure ()
                                             _ => emit "break;\n"
-  emitConstCase : {auto _: Ref OutputRef String} -> (e: Effect) -> CILExpr -> List1 (CILConstAlt e) -> Maybe (CIL (Just e)) -> Core ()
+  emitConstCase : {auto _ : Ref ConstructorNames ConsMap} -> {auto _: Ref OutputRef String} -> (e: Effect) -> CILExpr -> List1 (CILConstAlt e) -> Maybe (CIL (Just e)) -> Core ()
   emitConstCase e x xs def = do emit "switch ("
                                 emitExpr x
                                 emit ") {\n"
@@ -349,7 +313,7 @@ mutual
                                 emit "}\n"
 
 
-  emitStmt : {auto _: Ref OutputRef String} -> CIL e -> Core ()
+  emitStmt : {auto _ : Ref ConstructorNames ConsMap} -> {auto _: Ref OutputRef String} -> CIL e -> Core ()
   emitStmt (CILConstCase e fc sc xs y) = emitConstCase e sc xs y
   emitStmt (CILBlock fc xs x) = traverse emitStmt xs *> emitStmt x
   emitStmt (CILAssign fc n x) = do emit (cName n)
@@ -385,3 +349,32 @@ mutual
             emit ":\n"
             emitStmt body
             emit "break;\n"
+
+public export
+emitDefs : List CILDef -> Core String
+emitDefs xs = do
+  _ <- newRef OutputRef ""
+  _ <- newRef ConstructorNames empty
+  -- Sort structs first
+  let (priority, fns) = partition isPriority xs
+  emit "#include <stdint.h>\n"
+  emit "#include <stdbool.h>\n"
+  emit "#include <stddef.h>\n\n"
+  emit "#include <string.h>\n"
+  emit "#include <math.h>\n"
+  emit "#include <stdlib.h>\n"
+  emit "#include <idris_support.h>\n"
+  emit "typedef struct Value {} Value;\n\n"
+  traverse_ (emitDef) priority
+  traverse_ emitHeaders xs
+  traverse_ (emitDef) fns
+  emit "int main() {\n"
+  emit "  __main_0();\n";
+  emit "  return 0;\n"
+  emit "}\n"
+  get OutputRef
+  where isPriority : CILDef -> Bool
+        isPriority (MkCILStruct _ _ _) = True
+        isPriority (MkCILTaggedUnion _ _ _ _) = True
+        isPriority (MkCILForeign _ _ _ _ _) = True
+        isPriority _ = False

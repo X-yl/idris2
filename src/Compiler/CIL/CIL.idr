@@ -96,7 +96,7 @@ mutual
     data CILDef : Type where
       MkCILFun : FC -> Name -> (args: List (Name, CILType)) -> (return: CILType) -> (body: CIL (Just Return)) -> CILDef
       MkCILStruct : FC -> Name -> (members: SortedMap Name CILType) -> CILDef
-      MkCILTaggedUnion : FC -> Name -> (kinds: List (CILType)) -> CILDef -- a tagged union is a union of structs
+      MkCILTaggedUnion : FC -> Name -> (datacons: List Name) -> (kinds: List (CILType)) -> CILDef -- a tagged union is a union of structs
       MkCILForeign : FC -> Name -> (args: List CILType) -> (return: CILType) -> (external: String) -> CILDef
 
   covering
@@ -104,7 +104,7 @@ mutual
     Show CILDef where
       show (MkCILFun fc name args ret body) = assert_total $ "MkCILFun (" ++ show name ++ " " ++ show args ++ " " ++ show ret ++ " " ++ show body ++ ")"
       show (MkCILStruct fc name members) = assert_total $ "MkCILStruct (" ++ show name ++ " " ++ show members ++ ")"
-      show (MkCILTaggedUnion fc name kinds) = assert_total $ "MkCILTaggedUnion (" ++ show name ++ " " ++ show kinds ++ ")"
+      show (MkCILTaggedUnion fc name datacons kinds) = assert_total $ "MkCILTaggedUnion (" ++ show name ++ " " ++ show datacons ++ " " ++ show kinds ++ ")"
       show (MkCILForeign fc name args external ret) = assert_total $ "MkCILForeign (" ++ show name ++ " " ++ show args ++ " " ++ show ret ++ " : " ++ show external ++ ") "
 
   public export
@@ -222,7 +222,7 @@ public export
 getName : CILDef -> Name
 getName (MkCILFun _ n _ _ _) = n
 getName (MkCILStruct _ n _) = n
-getName (MkCILTaggedUnion _ n _) = n
+getName (MkCILTaggedUnion _ n _ _) = n
 getName (MkCILForeign _ n _ _ _) = n
 
 record DataCon where
@@ -251,7 +251,7 @@ getCons defs tn
                   | _ => pure Nothing
              case (gdef.definition, gdef.type) of
                   (DCon t arity _, ty) =>
-                        pure . Just $ MkDataCon cn t arity ty gdef.flags
+                        pure . Just $ MkDataCon gdef.fullname t arity ty gdef.flags
                   _ => pure Nothing
 
 isNat : List DefFlag -> Bool
@@ -810,11 +810,16 @@ compileDefs xs = do
         | _ => throw $ InternalError $ "impossible: Inferred type not a tagged union " ++ show tuType ++ " " ++ show name
       update ConstructorMap (insert name tuName)
       tus <- get TagUnions
+      defs <- get Ctxt
+      tyconName <- case !(lookupCtxtExact tuName (gamma defs)) of
+            Just x => pure $ fullname x
+            _ => throw $ InternalError $ "impossible: Already checked " ++ show tuName
       case lookup tuName tus of
         Just _ => pure $ Nothing
         Nothing => do
           update TagUnions (insert tuName tuType)
-          pure $ Just (MkCILTaggedUnion fc tuName kinds)
+          datacons <- map (DataCon.name) <$> getCons defs tyconName
+          pure $ Just (MkCILTaggedUnion fc tuName datacons kinds)
     compileDef _ _ = do
       pure $ Nothing
 

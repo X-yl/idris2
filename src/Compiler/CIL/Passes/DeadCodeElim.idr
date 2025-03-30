@@ -17,10 +17,10 @@ data Seen : Type where
 data Lambdas : Type where
 
 mutual
-    goExpr : {auto _ : Ref Seen (SortedMap Name Bool)} 
+    goExpr : {auto _ : Ref Seen (SortedMap Name Bool)}
             -> {auto _ : Ref Refs (SortedMap Name CILDef)}
             -> {auto _ : Ref Lambdas (SortedMap Name Name)}
-            -> CILExpr 
+            -> CILExpr
             -> Core CILExpr
     goExpr expr@(CILExprCall fc x y xs ys) = do
         _ <- goExpr x
@@ -42,7 +42,7 @@ mutual
         Just ref <- pure (lookup n refs)
             | _ => throw (InternalError "Ref not found")
         go ref
-        
+
         pure expr
     goExpr expr@(CILExprField fc x y n) = do
         _ <- goExpr x
@@ -60,22 +60,22 @@ mutual
         _ <- goExpr x
         pure expr
 
-    go : {auto _ : Ref Seen (SortedMap Name Bool)} 
+    go : {auto _ : Ref Seen (SortedMap Name Bool)}
         -> {auto _ : Ref Refs (SortedMap Name CILDef)}
         -> {auto _ : Ref Lambdas (SortedMap Name Name)}
-        -> CILDef 
+        -> CILDef
         -> Core ()
     go (MkCILFun fc n args return body) = do
-        if lookup n !(get Seen) == Just True 
+        if lookup n !(get Seen) == Just True
             then pure ()
             else do
                 update Seen (insert n True)
                 ignore $ traverseCIL goExpr body
     go (MkCILStruct fc n members) = do
-        if lookup n !(get Seen) == Just True 
+        if lookup n !(get Seen) == Just True
             then pure ()
             else do update Seen (insert n True)
-    go (MkCILTaggedUnion fc n kinds) = do
+    go (MkCILTaggedUnion fc n _ _) = do
         update Seen (insert n True)
         pure ()
     go (MkCILForeign fc n _ _ _) = do
@@ -84,15 +84,15 @@ mutual
 
 public export
 elimDeadCode : SortedMap Name Name -> List CILDef -> Core (List CILDef)
-elimDeadCode lambdas defs = do 
+elimDeadCode lambdas defs = do
     let defMap = (fromList (zip (getName <$> defs) defs))
     refs <- newRef Refs defMap
     seen <- newRef Seen empty
     Just main <- pure $ Data.SortedMap.lookup (MN "__main" 0) defMap
-                  | _ => throw (InternalError "No main function found") 
+                  | _ => throw (InternalError "No main function found")
     lambdas <- newRef Lambdas lambdas
     _ <-  go main
     seen <- get Seen
     let defs = filter (\def => lookup (getName def) seen == Just True) defs
     pure defs
-        
+
