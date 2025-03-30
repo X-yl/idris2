@@ -9,7 +9,6 @@ import Core.Core
 import Core.Name
 import Data.List
 import Data.SortedMap
-import Debug.Trace
 import Data.Vect
 
 %default covering
@@ -62,7 +61,6 @@ lambda_instantiate_expr lamstr defs c@(CILExprCall fc callee ty args argTys) = a
 
 lambda_instantiate_def : SortedMap Name Name -> SortedMap Name CILDef -> CILDef -> Core CILDef
 lambda_instantiate_def lamstr defs (MkCILFun fc n args return body) = do
-  _ <- pure $ traceVal $ "+++ Instantiating " ++ show n
   body' <- traverseCIL (lambda_instantiate_expr lamstr defs) body
   pure $ MkCILFun fc n args return body'
 lambda_instantiate_def _ _ struct@(MkCILStruct fc n members) = pure struct

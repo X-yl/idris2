@@ -14,7 +14,6 @@ import Core.Core
 import Core.Name
 import Data.List
 import Data.SortedMap
-import Debug.Trace
 import Data.List1
 import Compiler.RefC.RefC
 
@@ -27,7 +26,6 @@ mutual
   recompile_def : {auto _ : Ref LambdaStructEquiv (SortedMap Name Name)} -> {auto _ : Ref MonoDefs (List CILDef)} -> (SortedMap Name CILDef) -> CILDef -> List CILType -> Core CILDef
   recompile_def defs fn@(MkCILFun fc n fnArgs return body) actualArgs =
     if stricter (snd <$> fnArgs) actualArgs then do
-      _ <- pure $ traceVal $ "Recompiling function: " ++ show n ++ " ! " ++ show (snd <$> fnArgs) ++ " vs. " ++ show actualArgs 
       let actualArgs = combineStrictest (snd <$> fnArgs) actualArgs 
       let fnArgMap = fromList fnArgs
       let actualArgMap = fromList (zip (fst <$> fnArgs) actualArgs)
@@ -37,7 +35,6 @@ mutual
       body' <- recompile_cil name' defs fnArgMap actualArgMap body
       mdefs <- get MonoDefs
       let fn' = MkCILFun fc name' (toList actualArgMap) return body'
-      _ <- pure $ traceVal $ "<> <> Recompiled function: " ++ show fn' ++ " !"
       let mdefs' = filter (\x => getName x /= name') mdefs
       update MonoDefs (const (fn' :: mdefs'))
       pure fn'
@@ -127,7 +124,6 @@ mutual
 
   monomorphise_expr : {auto _ : Ref LambdaStructEquiv (SortedMap Name Name)} -> {auto _ : Ref MonoDefs (List CILDef)} -> SortedMap Name CILDef -> CILExpr -> Core (List (CIL Nothing), CILExpr)
   monomorphise_expr defs call@(CILExprCall fc (CILExprRef fc1 n y) ty args arg_types) = assert_total $ do
-      _ <- pure $ traceVal $ "expr" ++ show call
       monoDefs <- get MonoDefs
       let monoDefMap = Data.SortedMap.fromList $ (\x => (getName x, x)) <$> monoDefs
       let Just fn = lookup n (mergeLeft defs monoDefMap)
@@ -138,14 +134,13 @@ mutual
           actualArgTypes <- traverse inferExprType args
           fn'@(MkCILFun fc n' args' return' body') <- recompile_def defs fn actualArgTypes
           if n /= n' then do
-              -- _ <- pure $ traceVal $ "Changed " ++ show call ++ " to " ++ show (CILExprCall fc (CILExprRef fc1 n' y) ty args actualArgTypes)
               pure (concat lifted, CILExprCall fc (CILExprRef fc1 n' (CILFn (snd <$> args') return')) ty args actualArgTypes) 
             else pure (concat lifted, call)
         _ => pure ([], call) -- Foreign functions are not monomorphised
   monomorphise_expr defs s@(CILExprStruct fc n ty members) = assert_total $ do
       monoDefs <- get MonoDefs
       let monoDefMap = fromList $ (\x => (getName x, x)) <$> monoDefs
-      let Just struct = traceVal (lookup n (mergeLeft defs monoDefMap))
+      let Just struct = (lookup n (mergeLeft defs monoDefMap))
           | _ => throw $ InternalError $ "Struct " ++ show n ++ " not found in " ++ show (mergeLeft defs monoDefMap)
       actualTypes <- traverse inferExprType members
       struct'@(MkCILStruct fc n' members') <- recompile_def defs struct actualTypes
@@ -153,7 +148,7 @@ mutual
         lamstr <- get LambdaStructEquiv
         let Just lambdaName = lookup n lamstr
             | _ => throw $ InternalError "Lambda not found"
-        let mdefMap = traceVal $ fromList (zip (getName <$> !(get MonoDefs)) !(get MonoDefs))
+        let mdefMap = fromList (zip (getName <$> !(get MonoDefs)) !(get MonoDefs))
         let Just lambdaFn@(MkCILFun _ _ lamargs return body) = lookup lambdaName (mergeLeft defs mdefMap)
             | _ => throw $ InternalError $ "Lambda function " ++ show lambdaName ++ " not found"
         lambdaFn'@(MkCILFun _ lamName' _ _ _) <- recompile_def defs lambdaFn (CILStruct n' members' ::  (snd <$> drop 1 lamargs))
@@ -162,7 +157,6 @@ mutual
 
         pure ([], CILExprStruct fc n' (CILStruct n' members') members) else pure ([], s)
   monomorphise_expr defs call@(CILExprCall fc callee stType@(CILStruct stName stMembers) args arg_types) = assert_total $ do
-      _ <- pure $ traceVal $ "expr" ++ show call
 
       (lifted, args) <- unzip <$> traverse (monomorphise_expr defs) args
       actualArgTypes <- traverse inferExprType args
@@ -175,21 +169,16 @@ mutual
       let Just lambdaFn@(MkCILFun _ _ lamargs _ _) = lookup lambdaName (mergeLeft defs mdefMap)
           | _ => throw $ InternalError $ "Lambda function " ++ show lambdaName ++ " not found"
 
-      _ <- pure $ traceVal $ "Lambda " ++ show lambdaName ++ " has args " ++ show lamargs ++ " and actual args " ++ show actualArgTypes
-
       let lamargsNoStruct = case lamargs of
                           ((_, (CILStruct _ _)) :: xs) => xs
                           _ => lamargs
 
       if stricter (snd <$> lamargsNoStruct) actualArgTypes then do
           stName' <- pure $ MN (cName stName) (cast $ length !(get MonoDefs))
-          _ <- pure $ traceVal $ "|||||||||| Indirectly remono'd lambda " ++ show call ++ " to " ++ show (CILExprCall fc callee (CILStruct stName' stMembers) args actualArgTypes)
           let lamArgs' = case lamargs of
                           ((_, (CILStruct _ _)) :: xs) => (CILStruct stName' stMembers ::  (actualArgTypes))
                           _ => actualArgTypes
           lambdaFn'@(MkCILFun _ lamName' _ _ _) <- recompile_def defs lambdaFn lamArgs'
-          
-          _ <- pure $ traceVal $ "New lambda: " ++ show lamName' ++ "new st" ++ show stName'
           
           let structDef' = MkCILStruct EmptyFC stName' stMembers
           update MonoDefs (\x => structDef' :: x)
@@ -230,17 +219,14 @@ monomorphise_cil defs (CILDeclare fc x n y) = do
 
 monomorphise_def : {auto _ : Ref MonoDefs (List CILDef)} -> {auto _ : Ref LambdaStructEquiv (SortedMap Name Name)} -> SortedMap Name CILDef -> CILDef -> Core CILDef
 monomorphise_def defs (MkCILFun fc n args return body) = do
-  _ <- pure $ traceVal $ "====== Monomorphising function: " ++ show n ++ " !"
   body' <- monomorphise_cil defs body
-  -- _ <- pure $ traceVal $ "Fixing types: " ++ show n ++ " !"
   (body',changed) <- fix_assign_types body'
   -- fixme: This is a hack to recompile the definition after fixing assign_types.
   --        Instead of vaguely recompiling we should pass through the types that changed.
   monodefs <- get MonoDefs
   let monodefmap = fromList $ (\x => (getName x, x)) <$> monodefs
   if changed 
-    then do _ <- pure $ traceVal $ "Remonorphising function: " ++ show n ++ " !"
-            assert_total $ monomorphise_def (mergeLeft defs monodefmap) (MkCILFun fc n args return body')
+    then assert_total $ monomorphise_def (mergeLeft defs monodefmap) (MkCILFun fc n args return body')
     else pure $ MkCILFun fc n args return body'
 monomorphise_def _ struct = pure struct
 
@@ -249,7 +235,6 @@ monomorphise : SortedMap Name Name -> List CILDef -> Core (List CILDef, SortedMa
 monomorphise = repeat_monomorphisation empty
     where repeat_monomorphisation : SortedMap Name CILDef -> SortedMap Name Name -> List CILDef -> Core (List CILDef, SortedMap Name Name)
           repeat_monomorphisation otherdefs lamstr defs = do
-            _ <- pure $ traceVal $ "Monomorphising " ++ show (getName <$> defs)
             monoDefs <- newRef MonoDefs []
             lamRef <- newRef LambdaStructEquiv lamstr
             let defMap = mergeLeft otherdefs $ fromList (zip (getName <$> defs) defs)

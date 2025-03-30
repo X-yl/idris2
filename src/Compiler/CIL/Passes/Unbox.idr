@@ -10,7 +10,6 @@ import Core.Name
 import Compiler.Common
 import Core.Context
 import Data.Vect
-import Debug.Trace
 
 %default covering
 
@@ -84,7 +83,6 @@ mutual
             (Just (MkCILFun _ _ realArgs _ _)) => do
                 let argTys' = snd <$> realArgs 
                 args' <- traverse (uncurry unboxExpr) (zip argTys' args) 
-                -- _ <- pure $ traceVal $ "Call to " ++ show ex ++ " with args " ++ show (zip argTys args)
                 fixedArgs <- traverse inferExprType args'
                 pure $ CILExprCall fc ex' fnt args' fixedArgs
             _ => pure $ CILExprCall fc ex' fnt args argTys
@@ -125,11 +123,10 @@ mutual
               else if exp == CILDyn 
                 then deeper expr
                 else do
-                _ <- pure $ traceVal $ "Unboxing " ++ show expr ++ " to type " ++ show exp
                 convertDef <- getUnboxer exp
                 let unboxerType = CILFn [CILDyn] exp
                 -- expr' <- unboxExpr from expr
-                pure $ traceVal $ CILExprCall EmptyFC (CILExprRef EmptyFC convertDef unboxerType) unboxerType [expr] [exp]
+                pure $ CILExprCall EmptyFC (CILExprRef EmptyFC convertDef unboxerType) unboxerType [expr] [exp]
           unboxExpr' _ _ (CILExprCall fc ex fnt args argTys) = do
             ex' <- unboxExpr fnt ex
             case ex of 
@@ -139,7 +136,6 @@ mutual
                     (Just (MkCILFun _ _ realArgs _ _)) => do
                         let argTys' = snd <$> realArgs 
                         args' <- traverse (uncurry unboxExpr) (zip argTys' args) 
-                        -- _ <- pure $ traceVal $ "Call to " ++ show ex ++ " with args " ++ show (zip argTys args)
                         fixedArgs <- traverse inferExprType args'
                         pure $ CILExprCall fc ex' fnt args' fixedArgs
                     _ => pure $ CILExprCall fc ex' fnt args argTys
@@ -195,7 +191,6 @@ unboxCIL _  (CILDeclare fc ty n cil) = pure $ CILDeclare fc ty n !(unboxCIL ty c
 
 unboxDef : {auto _ : Ref CDefs DefMap} -> {auto _ : Ref Unboxers BoxMap} -> CILDef -> Core CILDef
 unboxDef (MkCILFun fc n args return body) = do
-    _ <- pure $ traceVal $ "---------- Unboxing function " ++ show n
     body <- unboxCIL return body
     pure $ MkCILFun fc n args return body
 unboxDef x = pure x

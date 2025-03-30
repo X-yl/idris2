@@ -14,7 +14,6 @@ import Data.List1
 import Data.SnocList
 import Data.SortedMap
 import Data.Vect
-import Debug.Trace
 import Idris.Syntax
 
 %default covering
@@ -314,7 +313,6 @@ mutual
   fnType' seen (t@(PrimVal fc c))  =  pure ([], !(termToCILType seen t))
   fnType' seen r@(Ref fc (TyCon tag arity) n) =  pure ([], !(termToCILType seen r))
   fnType' _ (Ref fc (DataCon t a) name) = do
-    _ <- pure $ traceVal $ "DataCon " ++ show name
     pure ([], CILDyn)
   fnType' _ (Ref fc nt name)       =  pure ([], CILDyn)
   fnType' _ (Erased fc why)        =  pure ([], CILDyn)
@@ -322,15 +320,14 @@ mutual
 
   termToCILType : {auto c : Ref Ctxt Defs} -> (seen: List Name) -> Term _ -> Core CILType
   termToCILType _ (PrimVal fc (PrT x)) =  pure $  inferPrimType x
-  termToCILType _ (PrimVal fc x) =  inferConstType (traceVal x)
+  termToCILType _ (PrimVal fc x) =  inferConstType (x)
   termToCILType seen term@(Bind _ _ _ _) = do (args, ret) <- (fnType' seen term)
                                               pure $ CILFn args ret
   termToCILType seen (Ref fc (TyCon tag arity) n) = do
     defs <- get Ctxt
     n' <- case !(lookupCtxtExact n (gamma defs)) of
-            Just x => pure $ traceVal $ fullname x
+            Just x => pure $ fullname x
             _ => throw $ InternalError $ "Type constructor " ++ show n ++ " not found"
-    _ <- pure $ traceVal $ "Type constructor " ++ show n' ++ " : " ++ show seen
     if n' `elem` seen
       then pure CILDyn -- Recursion detected, so use a boxed type.
       else do
@@ -644,7 +641,6 @@ mutual
   stmt e (NmLet fc name val sc) = do
     val <- stmt (Assign name) val
     _ <- updateLocalType name !(inferType val)
-    _ <- pure $ traceVal $ "Assigned " ++ show name ++ " to " ++ show val
     sc <- stmt e sc
     pure $ prepend [!(declare val)] sc
   stmt e (NmApp fc x xs) = do
@@ -710,7 +706,6 @@ mutual
                     Just ikind <- pure $ natToFin (cast t) (length kinds)
                       | _ => throw $ InternalError "impossible: tag out of bounds"
                     let argsType = index' kinds ikind
-                    _ <- pure $ traceVal $ "argsType of " ++ show name ++ " is " ++ show argsType
                     let arg  = CILExprField EmptyFC args (argsType) (MN "arg" (cast $ finToInteger iarg))
                     assignment <- assign (Assign name) arg
                     _ <- updateLocalType name !(inferExprType arg)
@@ -739,7 +734,6 @@ mutual
   stmt e (NmErased fc) = assign e $ CILExprConstant fc (I32 0) CILI32
   stmt e (NmCrash fc str) = ?stmt_rhs_14
   stmt e (NmLocal fc n) = do
-    _ <- pure $ traceVal n
     assign e $ CILExprLocal fc n !(lookupLocalType n)
 
   compileStructs : {auto _: Ref Structs (SortedMap Name (SortedMap Name CILType))} -> Core (List CILDef)
@@ -769,7 +763,7 @@ foreignToCIL CFForeignObj = CILPtr CILU8
 foreignToCIL CFWorld = CILWorld
 foreignToCIL (CFFun x y) = CILFn ([foreignToCIL x]) (foreignToCIL y)
 foreignToCIL (CFIORes x) = foreignToCIL x
-foreignToCIL (CFStruct str xs) = ?idk0
+foreignToCIL (CFStruct str xs) = CILStruct (UN $ mkUserName str) (fromList $ map (\(n, t) => ((UN $ mkUserName n), foreignToCIL t)) xs)
 foreignToCIL (CFUser n xs) = ?idk
 
 %hide Libraries.Data.PosMap.infixl.(|>)
@@ -800,19 +794,17 @@ compileDefs xs = do
       -> (Name, (FC, NamedDef), ClosedTerm)
       -> Core (Maybe CILDef)
     compileDef types (name, (fc, (MkNmFun args cexp)), type) = do
-      _ <- pure $ traceVal name
       (argTypes, ret) <- fnType type
       locals <- newRef Locals empty
       zip args argTypes |> traverse_ (\(n, t) => updateLocalType (n) t)
       refs <- newRef Refs types
-      body <- stmt Return (traceVal cexp)
+      body <- stmt Return (cexp)
       pure $ Just (MkCILFun fc (name) (zip args argTypes) ret body)
     compileDef _ (name, (fc, ((MkNmForeign ccs fargs ftype))), type) = do
       Just (_, (ext :: otherOpts)) <- pure $ parseCC ["RefC", "C"] ccs
         | _ => throw $ InternalError $ "Foreign function " ++ show name ++ " not in C: " ++ show ccs
       pure $ Just (MkCILForeign fc name (map foreignToCIL fargs) (foreignToCIL ftype) ext)
     compileDef _ (name, (fc, (MkNmCon tag arity nt)), type) = do
-      _ <- pure $ traceVal $ "DEF: " ++ show name ++ " - " ++ show type
       (_, tuType) <- fnType type
       CILTaggedUnion tuName kinds <- pure tuType
         | _ => throw $ InternalError $ "impossible: Inferred type not a tagged union " ++ show tuType ++ " " ++ show name
