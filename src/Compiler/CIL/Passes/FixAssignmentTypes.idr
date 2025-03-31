@@ -37,8 +37,8 @@ public export
 combineStrictest : List CILType -> List CILType -> List CILType
 combineStrictest [] [] = []
 combineStrictest (x :: xs) (y :: ys) = 
-  let stricter = if stricter' x y then y else x
-  in stricter :: (combineStrictest xs ys)
+  let s = if (stricter' x y) then y else x
+  in s :: (combineStrictest xs ys)
 combineStrictest [] ys = ys
 combineStrictest xs [] = xs
 
