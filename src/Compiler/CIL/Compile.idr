@@ -26,19 +26,19 @@ import System.Escape
 import System.File
 
 findFlags : {default "" d : String}
-             -> (search : String) 
-             -> {auto 0 known : IsJust (find (search ==) Env.envNames)} 
-             -> {auto 0 known2 : IsJust (find (("IDRIS2_" ++ search) ==) Env.envNames)} 
+             -> (search : String)
+             -> {auto 0 known : IsJust (find (search ==) Env.envNames)}
+             -> {auto 0 known2 : IsJust (find (("IDRIS2_" ++ search) ==) Env.envNames)}
              -> IO String
 findFlags s
     = do Nothing <- idrisGetEnv $ "IDRIS2_" ++ s
            | Just cc => pure cc
          Nothing <- idrisGetEnv s
-           | Just cc => pure cc 
+           | Just cc => pure cc
          pure d
 
 findCC : IO String
-findCC = findFlags {d = "cc"} "CC" 
+findCC = findFlags {d = "cc"} "CC"
 
 findCFLAGS : IO String
 findCFLAGS = findFlags "CFLAGS"

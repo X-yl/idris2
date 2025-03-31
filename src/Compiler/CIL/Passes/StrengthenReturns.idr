@@ -21,7 +21,7 @@ fixup changes (CILExprCall fc x y xs ys) = do
 fixup changes (CILExprOp fc f xs x) = do
     _ <- traverseVect (fixup changes) xs
     pure $ CILExprOp fc f xs x
-fixup changes (CILExprStruct fc n x xs) = do 
+fixup changes (CILExprStruct fc n x xs) = do
     xs' <- traverse (fixup changes) xs
     pure $ CILExprStruct fc n x xs'
 fixup changes ref@(CILExprRef fc n x) = do
@@ -32,7 +32,7 @@ fixup changes ref@(CILExprRef fc n x) = do
 fixup changes (CILExprField fc x y n) = do
     x' <- fixup changes x
     pure $ CILExprField fc x' y n
-fixup changes (CILExprTaggedUnion fc n x i xs) = do 
+fixup changes (CILExprTaggedUnion fc n x i xs) = do
     xs' <- traverse (fixup changes) xs
     pure $ CILExprTaggedUnion fc n x i xs'
 fixup _ x = pure x
@@ -55,16 +55,16 @@ public export
 strengthenReturns : List CILDef -> Core (List CILDef)
 strengthenReturns defs = do
   strengthened <- traverse (strengthenDef) defs
-  let changed = filter (\x => case x of 
+  let changed = filter (\x => case x of
             ((MkCILFun fc _ _ return _), (MkCILFun _ _ _ return' _)) => return' /= return
             _ => False
         ) (zip defs strengthened)
-  let changed: List (Name, CILType) = catMaybes $ map (\(_, def) => case def of 
+  let changed: List (Name, CILType) = catMaybes $ map (\(_, def) => case def of
         (MkCILFun fc n args return body) => Just (n, CILFn (snd <$> args) return)
         _ => Nothing) changed
   if length changed > 0 then do
     fixed <- traverse (fixupCalls (fromList changed)) strengthened
-    fixed <- traverse (\def => case def of 
+    fixed <- traverse (\def => case def of
         (MkCILFun fc n args return body) => pure $ MkCILFun fc n args return (fst !(fix_assign_types body))
         _ => pure def) fixed
     strengthenReturns fixed

@@ -12,7 +12,11 @@ import Data.SortedMap
 import Data.List1
 
 %default covering
+
 data FixedDecls : Type where
+data LamStruct : Type where
+
+
 
 mutual
   public export
@@ -26,6 +30,7 @@ mutual
   public export
   stricter' : CILType -> CILType -> Bool
   stricter' CILDyn CILDyn = False
+  stricter' (CILFn _ _) CILWorld = True
   stricter' CILDyn _      = True
   stricter' (CILPtr x) (CILPtr y) = stricter' x y
   stricter' (CILFn zs x) (CILFn ys y) = stricter zs ys || stricter' x y
@@ -36,7 +41,7 @@ mutual
 public export
 combineStrictest : List CILType -> List CILType -> List CILType
 combineStrictest [] [] = []
-combineStrictest (x :: xs) (y :: ys) = 
+combineStrictest (x :: xs) (y :: ys) =
   let s = if (stricter' x y) then y else x
   in s :: (combineStrictest xs ys)
 combineStrictest [] ys = ys
@@ -54,13 +59,13 @@ fix_assign_types_expr exp@(CILExprCall fc x y xs ys) = do
   xs' <- traverse fix_assign_types_expr xs
   strict <- pure $ combineStrictest !(traverse inferExprType xs')  ys
   pure $ CILExprCall fc x' !(inferExprType x') xs' strict
-fix_assign_types_expr (CILExprOp fc f xs x) = do 
+fix_assign_types_expr (CILExprOp fc f xs x) = do
   xs' <- traverseVect fix_assign_types_expr xs
   pure $ CILExprOp fc f xs' x
 fix_assign_types_expr (CILExprStruct fc n x xs) = do
   xs' <- traverse fix_assign_types_expr xs
   pure $ CILExprStruct fc n x xs'
-fix_assign_types_expr (CILExprField fc x y n) = do 
+fix_assign_types_expr (CILExprField fc x y n) = do
   x' <- fix_assign_types_expr x
   pure $ CILExprField fc x' y n
 fix_assign_types_expr (CILExprTaggedUnion fc n t k xs) = do
@@ -99,6 +104,6 @@ fix_assign_types' (CILConCase fc e sc xs) = do
 
 public export
 fix_assign_types : CIL e -> Core (CIL e, Bool)
-fix_assign_types cil = do 
+fix_assign_types cil = do
   _ <- newRef FixedDecls empty
   fix_assign_types' cil

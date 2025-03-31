@@ -54,17 +54,17 @@ getUnboxer to = do
       let n = MN "unbox" (cast $ length $ Data.SortedMap.toList boxers)
       let mallocType = CILFn [CILU64] CILDyn
       let memcpyType = CILFn [CILDyn, CILDyn, CILU64] CILDyn
-      let body : CIL (Just Return) = CILBlock EmptyFC 
+      let body : CIL (Just Return) = CILBlock EmptyFC
             [ CILDeclare EmptyFC to (MN "p" 0) (
                    CILAssign EmptyFC (MN "p" 0) (makeInitializer to))
             , CILDeclare EmptyFC CILDyn (MN "p" 1) (
                   CILAssign EmptyFC (MN "p" 1) (
                       CILExprCall EmptyFC (
-                        CILExprRef EmptyFC (UN $ mkUserName "memcpy") memcpyType) 
+                        CILExprRef EmptyFC (UN $ mkUserName "memcpy") memcpyType)
                         memcpyType
                         [ CILExprAddrof EmptyFC (CILExprLocal EmptyFC (MN "p" 0) to)
                         , CILExprLocal EmptyFC (MN "arg" 0) CILDyn
-                        , CILExprSizeof EmptyFC (CILExprLocal EmptyFC (MN "p" 0) to)] 
+                        , CILExprSizeof EmptyFC (CILExprLocal EmptyFC (MN "p" 0) to)]
                         [CILDyn, CILDyn, CILU64]))
             ] (CILReturn EmptyFC (CILExprLocal EmptyFC (MN "p" 0) to))
       let def = MkCILFun (EmptyFC) n [((MN "arg" 0, CILDyn))] to body
@@ -76,13 +76,13 @@ mutual
   deeper : {auto _ : Ref CDefs DefMap} -> {auto _ : Ref Unboxers BoxMap} -> CILExpr -> Core CILExpr
   deeper (CILExprCall fc ex fnt args argTys) = do
     ex' <- unboxExpr fnt ex
-    case ex of 
+    case ex of
       CILExprRef _ name _ => do
           defs <- get CDefs
           case (Data.SortedMap.lookup name defs) of
             (Just (MkCILFun _ _ realArgs _ _)) => do
-                let argTys' = snd <$> realArgs 
-                args' <- traverse (uncurry unboxExpr) (zip argTys' args) 
+                let argTys' = snd <$> realArgs
+                args' <- traverse (uncurry unboxExpr) (zip argTys' args)
                 fixedArgs <- traverse inferExprType args'
                 pure $ CILExprCall fc ex' fnt args' fixedArgs
             _ => pure $ CILExprCall fc ex' fnt args argTys
@@ -103,9 +103,9 @@ mutual
   deeper (CILExprTaggedUnion fc n ty i xs) = do
     (CILTaggedUnion _ kinds) <- pure ty
       | _ => throw (InternalError "Expected tagged union type")
-    Just tagIdx <- pure $ natToFin (cast i) (length kinds) 
+    Just tagIdx <- pure $ natToFin (cast i) (length kinds)
       | _ => throw (InternalError "Invalid tag")
-    let argTy = index' kinds tagIdx 
+    let argTy = index' kinds tagIdx
     (CILStruct _ membs) <- pure argTy
       | _ => throw (InternalError "Expected struct type")
     let argTys = snd <$> toList membs
@@ -118,9 +118,9 @@ mutual
   unboxExpr : {auto _ : Ref CDefs DefMap} -> {auto _ : Ref Unboxers BoxMap} -> CILType -> CILExpr -> Core CILExpr
   unboxExpr t x = unboxExpr' t !(inferExprType x) x
     where unboxExpr' : CILType -> CILType -> CILExpr -> Core CILExpr
-          unboxExpr' exp CILDyn expr = if exp == CILWorld 
+          unboxExpr' exp CILDyn expr = if exp == CILWorld
             then pure expr
-              else if exp == CILDyn 
+              else if exp == CILDyn
                 then deeper expr
                 else do
                 convertDef <- getUnboxer exp
@@ -129,13 +129,13 @@ mutual
                 pure $ CILExprCall EmptyFC (CILExprRef EmptyFC convertDef unboxerType) unboxerType [expr] [exp]
           unboxExpr' _ _ (CILExprCall fc ex fnt args argTys) = do
             ex' <- unboxExpr fnt ex
-            case ex of 
+            case ex of
               CILExprRef _ name _ => do
                   defs <- get CDefs
                   case (Data.SortedMap.lookup name defs) of
                     (Just (MkCILFun _ _ realArgs _ _)) => do
-                        let argTys' = snd <$> realArgs 
-                        args' <- traverse (uncurry unboxExpr) (zip argTys' args) 
+                        let argTys' = snd <$> realArgs
+                        args' <- traverse (uncurry unboxExpr) (zip argTys' args)
                         fixedArgs <- traverse inferExprType args'
                         pure $ CILExprCall fc ex' fnt args' fixedArgs
                     _ => pure $ CILExprCall fc ex' fnt args argTys
@@ -144,7 +144,7 @@ mutual
             xs' <- traverseVect (unboxExpr exp) xs
             pure $ CILExprOp fc f xs' x
           unboxExpr' _ _ expr@(CILExprLocal fc n x) = pure expr
-          unboxExpr' _ _ (CILExprStruct fc n ty args) = do 
+          unboxExpr' _ _ (CILExprStruct fc n ty args) = do
             (CILStruct _ membs) <- pure ty
               | _ => throw (InternalError "Expected struct type")
             let argTys = snd <$> toList membs
@@ -157,9 +157,9 @@ mutual
           unboxExpr' exp _ (CILExprTaggedUnion fc n ty tag args) = do
             (CILTaggedUnion _ kinds) <- pure ty
               | _ => throw (InternalError "Expected tagged union type")
-            Just tagIdx <- pure $ natToFin (cast tag) (length kinds) 
+            Just tagIdx <- pure $ natToFin (cast tag) (length kinds)
               | _ => throw (InternalError "Invalid tag")
-            let argTy = index' kinds tagIdx 
+            let argTy = index' kinds tagIdx
             (CILStruct _ membs) <- pure argTy
               | _ => throw (InternalError "Expected struct type")
             let argTys = snd <$> toList membs
@@ -197,7 +197,7 @@ unboxDef x = pure x
 
 public export
 unboxDefs : List CILDef -> Core (List CILDef)
-unboxDefs defs = do 
+unboxDefs defs = do
     let defMap = (fromList (zip (getName <$> defs) defs))
     _ <- newRef CDefs defMap
     _ <- newRef Unboxers empty

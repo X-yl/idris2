@@ -51,12 +51,12 @@ getBoxer from = do
       _ <- update Boxers (insert from def)
       pure n
 
-mutual 
+mutual
   ||| Like `boxExpr`, but one level deeper.
   deeper : {auto _ : Ref Boxers BoxMap} -> CILExpr -> Core CILExpr
   deeper (CILExprCall fc x y xs ys) = do
     x' <- boxExpr y x
-    xs' <- traverse (boxExpr y) xs  
+    xs' <- traverse (boxExpr y) xs
     pure $ CILExprCall fc x' y xs' ys
   deeper (CILExprOp fc f xs x) = do
     xs' <- traverseVect (boxExpr CILDyn) xs
@@ -84,7 +84,7 @@ mutual
     let argTys = snd <$> toList membs
     xs' <- traverse (uncurry boxExpr) (zip argTys xs)
     pure $ CILExprTaggedUnion fc n x i xs'
-  deeper (CILExprSizeof fc x) = do 
+  deeper (CILExprSizeof fc x) = do
     x' <- boxExpr CILDyn x
     pure $ CILExprSizeof fc x'
   deeper (CILExprAddrof fc x) = do

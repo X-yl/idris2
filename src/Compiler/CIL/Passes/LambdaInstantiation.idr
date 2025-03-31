@@ -36,15 +36,15 @@ lambda_instantiate_expr lamstr defs (CILExprSizeof fc x) = do
 lambda_instantiate_expr lamstr defs (CILExprAddrof fc x) = do
   x' <- lambda_instantiate_expr lamstr defs x
   pure $ CILExprAddrof fc x'
-lambda_instantiate_expr lamstr defs c@(CILExprCall fc callee ty args argTys) = assert_total $ 
+lambda_instantiate_expr lamstr defs c@(CILExprCall fc callee ty args argTys) = assert_total $
   case !(inferExprType callee) of
     CILStruct n x => do
       args <- traverse (lambda_instantiate_expr lamstr defs) args
-      let Just fnName = lookup n lamstr 
+      let Just fnName = lookup n lamstr
       let Just fn = lookup fnName defs
       lamType@(CILFn lamArgs return) <- fnType fn
       let callee' = CILExprRef fc fnName lamType
-      stType : Maybe CILType <- case lamArgs of 
+      stType : Maybe CILType <- case lamArgs of
         ((st@(CILStruct _ _)) :: xs) => pure $ Just st
         _ => pure Nothing
       let args = case stType of
