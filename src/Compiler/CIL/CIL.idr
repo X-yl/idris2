@@ -664,7 +664,7 @@ mutual
         let expr = CILExprTaggedUnion EmptyFC tuName ty' t args
         pure $ prepend (concat argStmts) !(assign e expr)
       Nothing => do
-        pure $ ?nontaggedstruct
+        pure $ ?stmt_rhs_6
   stmt e (NmOp fc f xs) = do
     (argStmts, args) <- unzip <$> traverseVect lift xs
     pure $ prepend (concat argStmts) $ !(assign e $ CILExprOp fc f args (inferOpArgType f))
@@ -764,7 +764,7 @@ foreignToCIL CFWorld = CILWorld
 foreignToCIL (CFFun x y) = CILFn ([foreignToCIL x]) (foreignToCIL y)
 foreignToCIL (CFIORes x) = foreignToCIL x
 foreignToCIL (CFStruct str xs) = CILStruct (UN $ mkUserName str) (fromList $ map (\(n, t) => ((UN $ mkUserName n), foreignToCIL t)) xs)
-foreignToCIL (CFUser n xs) = ?idk
+foreignToCIL (CFUser n xs) = ?foreignToCIL_rhs1
 
 %hide Libraries.Data.PosMap.infixl.(|>)
 public export compileDefs : {auto c: Ref Ctxt Defs}

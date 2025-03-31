@@ -363,6 +363,7 @@ emitDefs xs = do
   emit "#include <string.h>\n"
   emit "#include <math.h>\n"
   emit "#include <stdlib.h>\n"
+  emit "#include <strOps.h>\n"
   emit "#include <idris_support.h>\n"
   emit "typedef struct Value {} Value;\n\n"
   traverse_ (emitDef) priority

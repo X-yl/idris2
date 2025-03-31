@@ -1,8 +1,8 @@
 include ../config.mk
 
-.PHONY: build build-c build-refc build-chez
+.PHONY: build build-c build-refc build-chez build-cil
 
-build: build-c build-refc build-chez
+build: build-c build-refc build-chez build-cil
 
 build-c:
 	@${MAKE} -C c
@@ -10,12 +10,15 @@ build-c:
 build-refc:
 	@${MAKE} -C refc
 
+build-cil:
+	@${MAKE} -C cil
+
 build-chez:
 	@${MAKE} -C chez
 
-.PHONY: clean clean-c clean-refc clean-chez
+.PHONY: clean clean-c clean-refc clean-chez clean-cil
 
-clean: clean-c clean-refc clean-chez
+clean: clean-c clean-refc clean-chez clean-cil
 
 clean-c:
 	@${MAKE} -C c cleandep
@@ -23,12 +26,15 @@ clean-c:
 clean-refc:
 	@${MAKE} -C refc cleandep
 
+clean-cil:
+	@${MAKE} -C cil cleandep
+
 clean-chez:
 	@${MAKE} -C chez clean
 
-.PHONY: install install-docs install-racket install-gambit install-js install-c install-refc install-chez
+.PHONY: install install-docs install-racket install-gambit install-js install-c install-refc install-chez install-cil
 
-install: install-docs install-racket install-gambit install-js install-c install-refc install-chez
+install: install-docs install-racket install-gambit install-js install-c install-refc install-chez install-cil
 
 install-docs:
 	mkdir -p ${DESTDIR}${PREFIX}/${NAME_VERSION}/support/docs
@@ -51,6 +57,9 @@ install-c:
 
 install-refc:
 	@${MAKE} -C refc install
+
+install-cil:
+	@${MAKE} -C cil install
 
 install-chez:
 	@${MAKE} -C chez install

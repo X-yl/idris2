@@ -63,7 +63,7 @@ compileCObjectFile {asLibrary} sourceFile objectFile =
      cFlags <- coreLift findCFLAGS
      cppFlags <- coreLift findCPPFLAGS
 
-     refcDir <- findDataFile "refc"
+     cilDir <- findDataFile "cil"
      cDir <- findDataFile "c"
 
      let libraryFlag = if asLibrary then ["-fpic"] else []
@@ -71,7 +71,7 @@ compileCObjectFile {asLibrary} sourceFile objectFile =
      let runccobj = (escapeCmd $
          [cc, "-Werror", "-c", "-O3", "-g", "-Wl,-z,stack-size=1677721600"] ++ libraryFlag ++ [sourceFile,
               "-o", objectFile,
-              "-I" ++ refcDir,
+              "-I" ++ cilDir,
               "-I" ++ cDir])
               ++ " " ++ cppFlags ++ " " ++ cFlags
 
@@ -93,17 +93,17 @@ compileCFile {asShared} objectFile outFile =
      ldLibs <- coreLift findLDLIBS
 
      dirs <- getDirs
-     refcDir <- findDataFile "refc"
+     cilDir <- findDataFile "cil"
      supportFile <- findLibraryFile "libidris2_support.a"
 
      let sharedFlag = if asShared then ["-shared"] else []
 
      let runcc = (escapeCmd $
-         [cc, "-Werror"] ++ sharedFlag ++ [objectFile,
+         [cc, "-Werror", "-g", "-Wl,-z,stack-size=1677721600", "-O3"] ++ sharedFlag ++ [objectFile,
               "-o", outFile,
               supportFile,
-              "-lidris2_refc",
-              "-L" ++ refcDir
+              "-lidris2_cil",
+              "-L" ++ cilDir
               ] ++ map (\d => "-L" ++ d) (lib_dirs dirs) ++ [
               "-lgmp", "-lm"])
               ++ " " ++ (unwords [cFlags, ldFlags, ldLibs])
