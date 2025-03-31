@@ -142,7 +142,7 @@ compileExpr defs s tmpDir outputDir tm outfile = do
   types <- traverse (\(n, _) => lookupCtxtExact n (gamma defs)) namedDefs
   let types = map (type<$>) types
 
-  prettyTypes : List (ClosedTerm) <- mapMaybeM (\ty =>
+  prettyTypes <- mapMaybeM (\ty =>
     case ty of
       Nothing => pure $ Nothing
       Just ty => do
@@ -154,7 +154,7 @@ compileExpr defs s tmpDir outputDir tm outfile = do
   let fnDefs = (\((a, (b,c)), d) => (a, (b,c), d)) <$> zip (mainNamed :: namedDefs) (mainType :: prettyTypes)
   compiled <- compileDefs fnDefs
 
-  code: String <-  emitDefs !(uncurry optimize compiled)
+  code <-  emitDefs !(uncurry optimize compiled)
 
   let cfile = outputDir </> outfile ++ ".c"
   let outobj = outputDir </> outfile ++ ".o"

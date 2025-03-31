@@ -59,7 +59,7 @@ strengthenReturns defs = do
             ((MkCILFun fc _ _ return _), (MkCILFun _ _ _ return' _)) => return' /= return
             _ => False
         ) (zip defs strengthened)
-  let changed: List (Name, CILType) = catMaybes $ map (\(_, def) => case def of
+  let changed = catMaybes $ map (\(_, def) => case def of
         (MkCILFun fc n args return body) => Just (n, CILFn (snd <$> args) return)
         _ => Nothing) changed
   if length changed > 0 then do

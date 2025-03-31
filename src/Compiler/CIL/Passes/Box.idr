@@ -29,7 +29,7 @@ getBoxer from = do
       let n = MN "box" (cast $ length $ Data.SortedMap.toList boxers)
       let mallocType = CILFn [CILU64] CILDyn
       let memcpyType = CILFn [CILDyn, CILDyn, CILU64] CILDyn
-      let body : CIL (Just Return) = CILBlock EmptyFC
+      let body = CILBlock EmptyFC
             [CILDeclare EmptyFC CILDyn (MN "p" 0) (
                   CILAssign EmptyFC (MN "p" 0) (
                       CILExprCall EmptyFC (

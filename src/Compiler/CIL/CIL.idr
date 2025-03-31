@@ -796,10 +796,10 @@ compileDefs xs = do
     compileDef types (name, (fc, (MkNmFun args cexp)), type) = do
       (argTypes, ret) <- fnType type
       locals <- newRef Locals empty
-      zip args argTypes |> traverse_ (\(n, t) => updateLocalType (n) t)
+      traverse_ (uncurry updateLocalType) (zip args argTypes)
       refs <- newRef Refs types
       body <- stmt Return (cexp)
-      pure $ Just (MkCILFun fc (name) (zip args argTypes) ret body)
+      pure $ Just (MkCILFun fc name (zip args argTypes) ret body)
     compileDef _ (name, (fc, ((MkNmForeign ccs fargs ftype))), type) = do
       Just (_, (ext :: otherOpts)) <- pure $ parseCC ["RefC", "C"] ccs
         | _ => throw $ InternalError $ "Foreign function " ++ show name ++ " not in C: " ++ show ccs

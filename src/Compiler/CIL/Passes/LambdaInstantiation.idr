@@ -36,28 +36,26 @@ lambda_instantiate_expr lamstr defs (CILExprSizeof fc x) = do
 lambda_instantiate_expr lamstr defs (CILExprAddrof fc x) = do
   x' <- lambda_instantiate_expr lamstr defs x
   pure $ CILExprAddrof fc x'
-lambda_instantiate_expr lamstr defs c@(CILExprCall fc callee ty args argTys) = assert_total $
-  case !(inferExprType callee) of
-    CILStruct n x => do
-      args <- traverse (lambda_instantiate_expr lamstr defs) args
-      let Just fnName = lookup n lamstr
-      let Just fn = lookup fnName defs
-      lamType@(CILFn lamArgs return) <- fnType fn
-      let callee' = CILExprRef fc fnName lamType
-      stType : Maybe CILType <- case lamArgs of
-        ((st@(CILStruct _ _)) :: xs) => pure $ Just st
-        _ => pure Nothing
-      let args = case stType of
-                  Just st => callee :: args
-                  Nothing => args
-      pure $ CILExprCall fc callee' lamType args argTys
-    _ => do
-      callee' <- lambda_instantiate_expr lamstr defs callee
-      args' <- traverse (lambda_instantiate_expr lamstr defs) args
-      pure $ CILExprCall fc callee' ty args' argTys
-    where fnType : CILDef -> Core CILType
-          fnType (MkCILFun _ _ args return _) = pure $ CILFn (snd <$> args) return
-          fnType _ = throw $ InternalError "Non Fun cannot be called"
+lambda_instantiate_expr lamstr defs c@(CILExprCall fc callee ty args argTys) =
+  assert_total $
+    case !(inferExprType callee) of
+      CILStruct n x => do
+          args <- traverse (lambda_instantiate_expr lamstr defs) args
+          let Just fnName = lookup n lamstr
+          let Just fn = lookup fnName defs
+          lamType@(CILFn lamArgs return) <- fnType fn
+          let callee' = CILExprRef fc fnName lamType
+          let args = case lamArgs of
+                      (((CILStruct _ _)) :: xs) => callee :: args
+                      _ => args
+          pure $ CILExprCall fc callee' lamType args argTys
+      _ => do
+          callee' <- lambda_instantiate_expr lamstr defs callee
+          args' <- traverse (lambda_instantiate_expr lamstr defs) args
+          pure $ CILExprCall fc callee' ty args' argTys
+  where fnType : CILDef -> Core CILType
+        fnType (MkCILFun _ _ args return _) = pure $ CILFn (snd <$> args) return
+        fnType _ = throw $ InternalError "Non Fun cannot be called"
 
 lambda_instantiate_def : SortedMap Name Name -> SortedMap Name CILDef -> CILDef -> Core CILDef
 lambda_instantiate_def lamstr defs (MkCILFun fc n args return body) = do
